@@ -103,8 +103,8 @@ func TestClient_FetchPullRequestEvents(t *testing.T) {
 	}
 
 	// Verify first event is PR opened
-	if events[0].Type != EventTypePROpened {
-		t.Errorf("expected first event to be PR opened, got %s", events[0].Type)
+	if events[0].Kind != EventTypePROpened {
+		t.Errorf("expected first event to be PR opened, got %s", events[0].Kind)
 	}
 
 	// Verify events are sorted by timestamp

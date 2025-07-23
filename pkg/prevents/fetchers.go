@@ -3,11 +3,86 @@ package prevents
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/google/go-github/v57/github"
 )
 
 const maxPerPage = 100
+
+// mentionRegex matches GitHub usernames in the format @username
+// GitHub usernames can contain alphanumeric characters and hyphens, but not consecutive hyphens
+var mentionRegex = regexp.MustCompile(`(?:^|[^a-zA-Z0-9])@([a-zA-Z0-9][a-zA-Z0-9\-]{0,38}[a-zA-Z0-9]|[a-zA-Z0-9])`)
+
+// questionPatterns contains common patterns that indicate a question or request for advice
+var questionPatterns = []string{
+	"how can",
+	"how do",
+	"how would",
+	"how should",
+	"should i",
+	"should we",
+	"can i",
+	"can we",
+	"can you",
+	"could you",
+	"would you",
+	"what do you think",
+	"what's the best",
+	"what is the best",
+	"any suggestions",
+	"any ideas",
+	"any thoughts",
+	"anyone know",
+	"does anyone",
+	"is it possible",
+	"is there a way",
+	"wondering if",
+	"thoughts on",
+	"advice on",
+	"help with",
+	"need help",
+}
+
+// extractMentions extracts all @username mentions from a text string
+func extractMentions(text string) []string {
+	matches := mentionRegex.FindAllStringSubmatch(text, -1)
+	mentions := make([]string, 0, len(matches))
+	seen := make(map[string]bool)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			username := match[1]
+			if !seen[username] {
+				mentions = append(mentions, username)
+				seen[username] = true
+			}
+		}
+	}
+	
+	return mentions
+}
+
+// containsQuestion checks if the text contains patterns that indicate a question or request for advice
+func containsQuestion(text string) bool {
+	// Convert to lowercase for case-insensitive matching
+	lowerText := strings.ToLower(text)
+	
+	// Check for question mark
+	if strings.Contains(text, "?") {
+		return true
+	}
+	
+	// Check for common question patterns
+	for _, pattern := range questionPatterns {
+		if strings.Contains(lowerText, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
 
 func (c *Client) fetchCommits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching commits", "owner", owner, "repo", repo, "pr", prNumber)
@@ -23,7 +98,7 @@ func (c *Client) fetchCommits(ctx context.Context, owner, repo string, prNumber 
 
 		for _, commit := range commits {
 			event := Event{
-				Type:      EventTypeCommit,
+				Kind:      EventTypeCommit,
 				Timestamp: commit.GetCommit().GetAuthor().GetDate().Time,
 				Actor:     commit.GetAuthor().GetLogin(),
 				Body:      commit.GetCommit().GetMessage(),
@@ -57,14 +132,21 @@ func (c *Client) fetchComments(ctx context.Context, owner, repo string, prNumber
 		}
 
 		for _, comment := range comments {
+			body := comment.GetBody()
 			event := Event{
-				Type:      EventTypeComment,
+				Kind:      EventTypeComment,
 				Timestamp: comment.GetCreatedAt().Time,
 				Actor:     comment.GetUser().GetLogin(),
-				Body:      comment.GetBody(),
+				Body:      body,
+				Question:  containsQuestion(body),
 			}
 			if isBot(comment.GetUser()) {
 				event.Bot = true
+			}
+			// Extract mentions and add to targets
+			mentions := extractMentions(body)
+			if len(mentions) > 0 {
+				event.Targets = mentions
 			}
 			events = append(events, event)
 		}
@@ -93,15 +175,22 @@ func (c *Client) fetchReviews(ctx context.Context, owner, repo string, prNumber 
 
 		for _, review := range reviews {
 			if review.GetState() != "" {
+				body := review.GetBody()
 				event := Event{
-					Type:      EventTypeReview,
+					Kind:      EventTypeReview,
 					Timestamp: review.GetSubmittedAt().Time,
 					Actor:     review.GetUser().GetLogin(),
 					Outcome:   review.GetState(), // "approved", "changes_requested", "commented"
-					Body:      review.GetBody(),
+					Body:      body,
+					Question:  containsQuestion(body),
 				}
 				if isBot(review.GetUser()) {
 					event.Bot = true
+				}
+				// Extract mentions and add to targets
+				mentions := extractMentions(body)
+				if len(mentions) > 0 {
+					event.Targets = mentions
 				}
 				events = append(events, event)
 			}
@@ -130,14 +219,21 @@ func (c *Client) fetchReviewComments(ctx context.Context, owner, repo string, pr
 		}
 
 		for _, comment := range comments {
+			body := comment.GetBody()
 			event := Event{
-				Type:      EventTypeReviewComment,
+				Kind:      EventTypeReviewComment,
 				Timestamp: comment.GetCreatedAt().Time,
 				Actor:     comment.GetUser().GetLogin(),
-				Body:      comment.GetBody(),
+				Body:      body,
+				Question:  containsQuestion(body),
 			}
 			if isBot(comment.GetUser()) {
 				event.Bot = true
+			}
+			// Extract mentions and add to targets
+			mentions := extractMentions(body)
+			if len(mentions) > 0 {
+				event.Targets = mentions
 			}
 			events = append(events, event)
 		}
@@ -201,7 +297,7 @@ func (c *Client) parseTimelineEvent(item *github.Timeline) *Event {
 	}
 
 	event := &Event{
-		Type:      eventType,
+		Kind:      eventType,
 		Timestamp: item.GetCreatedAt().Time,
 		Actor:     item.GetActor().GetLogin(),
 		Bot:       isBot(item.GetActor()),
@@ -250,7 +346,7 @@ func (c *Client) fetchStatusChecks(ctx context.Context, owner, repo string, pr *
 
 	for _, status := range statuses {
 		event := Event{
-			Type:      EventTypeStatusCheck,
+			Kind:      EventTypeStatusCheck,
 			Timestamp: status.GetCreatedAt().Time,
 			Actor:     status.GetCreator().GetLogin(),
 			Outcome:   status.GetState(), // "success", "failure", "pending", "error"
@@ -287,7 +383,7 @@ func (c *Client) fetchCheckRuns(ctx context.Context, owner, repo string, pr *git
 		}
 		
 		event := Event{
-			Type:      EventTypeCheckRun,
+			Kind:      EventTypeCheckRun,
 			Timestamp: timestamp,
 			Actor:     checkRun.GetApp().GetOwner().GetLogin(),
 			Outcome:   checkRun.GetConclusion(), // "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"

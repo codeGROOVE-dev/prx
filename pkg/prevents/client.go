@@ -102,7 +102,7 @@ func (c *Client) FetchPullRequestEvents(ctx context.Context, owner, repo string,
 
 	// Add PR opened event
 	events = append(events, Event{
-		Type:      EventTypePROpened,
+		Kind:      EventTypePROpened,
 		Timestamp: pr.GetCreatedAt().Time,
 		Actor:     pr.GetUser().GetLogin(),
 		Bot:       isBot(pr.GetUser()),
@@ -171,14 +171,14 @@ func (c *Client) FetchPullRequestEvents(ctx context.Context, owner, repo string,
 	// Add PR closed/merged event
 	if pr.GetMerged() {
 		events = append(events, Event{
-			Type:      EventTypePRMerged,
+			Kind:      EventTypePRMerged,
 			Timestamp: pr.GetMergedAt().Time,
 			Actor:     pr.GetMergedBy().GetLogin(),
 			Bot:       isBot(pr.GetMergedBy()),
 		})
 	} else if pr.GetState() == "closed" {
 		events = append(events, Event{
-			Type:      EventTypePRClosed,
+			Kind:      EventTypePRClosed,
 			Timestamp: pr.GetClosedAt().Time,
 			Actor:     pr.GetUser().GetLogin(),
 			Bot:       isBot(pr.GetUser()),

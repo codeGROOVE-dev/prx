@@ -32,11 +32,12 @@ const (
 
 // Event represents a single event that occurred on a pull request.
 type Event struct {
-	Type      EventType `json:"type"`
+	Kind      EventType `json:"kind"`
 	Timestamp time.Time `json:"timestamp"`
 	Actor     string    `json:"actor"`
 	Bot       bool      `json:"bot,omitempty"`     // True if the actor is a bot
 	Targets   []string  `json:"targets,omitempty"` // Users affected by the action (assignees, reviewers, etc.)
-	Outcome   string    `json:"outcome,omitempty"` // For checks: "success", "failure", "pending", etc.
+	Outcome   string    `json:"outcome,omitempty"` // For checks: "success", "failure", "pending", etc. For reviews: "approved", "changes_requested", "commented"
 	Body      string    `json:"body,omitempty"`    // For comments and reviews
+	Question  bool      `json:"question,omitempty"` // True if the comment/review contains a question
 }

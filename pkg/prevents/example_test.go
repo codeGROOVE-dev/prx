@@ -29,7 +29,7 @@ func Example() {
 	for _, event := range events {
 		fmt.Printf("%s: %s by %s\n", 
 			event.Timestamp.Format("2006-01-02 15:04:05"),
-			event.Type,
+			event.Kind,
 			event.Actor,
 		)
 	}
@@ -50,7 +50,7 @@ func ExampleClient_FetchPullRequestEvents() {
 	// Count events by type
 	eventCounts := make(map[prevents.EventType]int)
 	for _, event := range events {
-		eventCounts[event.Type]++
+		eventCounts[event.Kind]++
 	}
 
 	// Print summary
