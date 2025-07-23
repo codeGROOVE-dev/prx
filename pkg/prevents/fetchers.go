@@ -3,88 +3,13 @@ package prevents
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 
 	"github.com/google/go-github/v57/github"
 )
 
 const maxPerPage = 100
 
-// mentionRegex matches GitHub usernames in the format @username
-// GitHub usernames can contain alphanumeric characters and hyphens, but not consecutive hyphens
-var mentionRegex = regexp.MustCompile(`(?:^|[^a-zA-Z0-9])@([a-zA-Z0-9][a-zA-Z0-9\-]{0,38}[a-zA-Z0-9]|[a-zA-Z0-9])`)
-
-// questionPatterns contains common patterns that indicate a question or request for advice
-var questionPatterns = []string{
-	"how can",
-	"how do",
-	"how would",
-	"how should",
-	"should i",
-	"should we",
-	"can i",
-	"can we",
-	"can you",
-	"could you",
-	"would you",
-	"what do you think",
-	"what's the best",
-	"what is the best",
-	"any suggestions",
-	"any ideas",
-	"any thoughts",
-	"anyone know",
-	"does anyone",
-	"is it possible",
-	"is there a way",
-	"wondering if",
-	"thoughts on",
-	"advice on",
-	"help with",
-	"need help",
-}
-
-// extractMentions extracts all @username mentions from a text string
-func extractMentions(text string) []string {
-	matches := mentionRegex.FindAllStringSubmatch(text, -1)
-	mentions := make([]string, 0, len(matches))
-	seen := make(map[string]bool)
-	
-	for _, match := range matches {
-		if len(match) > 1 {
-			username := match[1]
-			if !seen[username] {
-				mentions = append(mentions, username)
-				seen[username] = true
-			}
-		}
-	}
-	
-	return mentions
-}
-
-// containsQuestion checks if the text contains patterns that indicate a question or request for advice
-func containsQuestion(text string) bool {
-	// Convert to lowercase for case-insensitive matching
-	lowerText := strings.ToLower(text)
-	
-	// Check for question mark
-	if strings.Contains(text, "?") {
-		return true
-	}
-	
-	// Check for common question patterns
-	for _, pattern := range questionPatterns {
-		if strings.Contains(lowerText, pattern) {
-			return true
-		}
-	}
-	
-	return false
-}
-
-func (c *Client) fetchCommits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
+func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching commits", "owner", owner, "repo", repo, "pr", prNumber)
 	
 	var events []Event
@@ -98,7 +23,7 @@ func (c *Client) fetchCommits(ctx context.Context, owner, repo string, prNumber 
 
 		for _, commit := range commits {
 			event := Event{
-				Kind:      EventTypeCommit,
+				Kind:      Commit,
 				Timestamp: commit.GetCommit().GetAuthor().GetDate().Time,
 				Actor:     commit.GetAuthor().GetLogin(),
 				Body:      commit.GetCommit().GetMessage(),
@@ -119,7 +44,7 @@ func (c *Client) fetchCommits(ctx context.Context, owner, repo string, prNumber 
 	return events, nil
 }
 
-func (c *Client) fetchComments(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
+func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching comments", "owner", owner, "repo", repo, "pr", prNumber)
 	
 	var events []Event
@@ -134,7 +59,7 @@ func (c *Client) fetchComments(ctx context.Context, owner, repo string, prNumber
 		for _, comment := range comments {
 			body := comment.GetBody()
 			event := Event{
-				Kind:      EventTypeComment,
+				Kind:      Comment,
 				Timestamp: comment.GetCreatedAt().Time,
 				Actor:     comment.GetUser().GetLogin(),
 				Body:      body,
@@ -161,7 +86,7 @@ func (c *Client) fetchComments(ctx context.Context, owner, repo string, prNumber
 	return events, nil
 }
 
-func (c *Client) fetchReviews(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
+func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching reviews", "owner", owner, "repo", repo, "pr", prNumber)
 	
 	var events []Event
@@ -177,7 +102,7 @@ func (c *Client) fetchReviews(ctx context.Context, owner, repo string, prNumber 
 			if review.GetState() != "" {
 				body := review.GetBody()
 				event := Event{
-					Kind:      EventTypeReview,
+					Kind:      Review,
 					Timestamp: review.GetSubmittedAt().Time,
 					Actor:     review.GetUser().GetLogin(),
 					Outcome:   review.GetState(), // "approved", "changes_requested", "commented"
@@ -206,7 +131,7 @@ func (c *Client) fetchReviews(ctx context.Context, owner, repo string, prNumber 
 	return events, nil
 }
 
-func (c *Client) fetchReviewComments(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
+func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching review comments", "owner", owner, "repo", repo, "pr", prNumber)
 	
 	var events []Event
@@ -221,7 +146,7 @@ func (c *Client) fetchReviewComments(ctx context.Context, owner, repo string, pr
 		for _, comment := range comments {
 			body := comment.GetBody()
 			event := Event{
-				Kind:      EventTypeReviewComment,
+				Kind:      ReviewComment,
 				Timestamp: comment.GetCreatedAt().Time,
 				Actor:     comment.GetUser().GetLogin(),
 				Body:      body,
@@ -248,7 +173,7 @@ func (c *Client) fetchReviewComments(ctx context.Context, owner, repo string, pr
 	return events, nil
 }
 
-func (c *Client) fetchTimelineEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
+func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching timeline events", "owner", owner, "repo", repo, "pr", prNumber)
 	
 	var events []Event
@@ -279,16 +204,16 @@ func (c *Client) fetchTimelineEvents(ctx context.Context, owner, repo string, pr
 
 func (c *Client) parseTimelineEvent(item *github.Timeline) *Event {
 	// Map of event types to our event types
-	eventTypeMap := map[string]EventType{
-		"assigned":               EventTypeAssigned,
-		"unassigned":             EventTypeUnassigned,
-		"labeled":                EventTypeLabeled,
-		"unlabeled":              EventTypeUnlabeled,
-		"milestoned":             EventTypeMilestoned,
-		"demilestoned":           EventTypeDemilestoned,
-		"review_requested":       EventTypeReviewRequested,
-		"review_request_removed": EventTypeReviewRequestRemoved,
-		"reopened":               EventTypePRReopened,
+	eventTypeMap := map[string]EventKind{
+		"assigned":               Assigned,
+		"unassigned":             Unassigned,
+		"labeled":                Labeled,
+		"unlabeled":              Unlabeled,
+		"milestoned":             Milestoned,
+		"demilestoned":           Demilestoned,
+		"review_requested":       ReviewRequested,
+		"review_request_removed": ReviewRequestRemoved,
+		"reopened":               PRReopened,
 	}
 
 	eventType, ok := eventTypeMap[item.GetEvent()]
@@ -329,7 +254,7 @@ func (c *Client) parseTimelineEvent(item *github.Timeline) *Event {
 	return event
 }
 
-func (c *Client) fetchStatusChecks(ctx context.Context, owner, repo string, pr *github.PullRequest) ([]Event, error) {
+func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *github.PullRequest) ([]Event, error) {
 	c.logger.Debug("fetching status checks", "owner", owner, "repo", repo, "sha", pr.GetHead().GetSHA())
 	
 	var events []Event
@@ -346,7 +271,7 @@ func (c *Client) fetchStatusChecks(ctx context.Context, owner, repo string, pr *
 
 	for _, status := range statuses {
 		event := Event{
-			Kind:      EventTypeStatusCheck,
+			Kind:      StatusCheck,
 			Timestamp: status.GetCreatedAt().Time,
 			Actor:     status.GetCreator().GetLogin(),
 			Outcome:   status.GetState(), // "success", "failure", "pending", "error"
@@ -361,7 +286,7 @@ func (c *Client) fetchStatusChecks(ctx context.Context, owner, repo string, pr *
 	return events, nil
 }
 
-func (c *Client) fetchCheckRuns(ctx context.Context, owner, repo string, pr *github.PullRequest) ([]Event, error) {
+func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *github.PullRequest) ([]Event, error) {
 	c.logger.Debug("fetching check runs", "owner", owner, "repo", repo, "sha", pr.GetHead().GetSHA())
 	
 	var events []Event
@@ -383,7 +308,7 @@ func (c *Client) fetchCheckRuns(ctx context.Context, owner, repo string, pr *git
 		}
 		
 		event := Event{
-			Kind:      EventTypeCheckRun,
+			Kind:      CheckRun,
 			Timestamp: timestamp,
 			Actor:     checkRun.GetApp().GetOwner().GetLogin(),
 			Outcome:   checkRun.GetConclusion(), // "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"

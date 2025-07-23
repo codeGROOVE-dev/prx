@@ -54,7 +54,7 @@ func main() {
 
     // Fetch events for a pull request
     ctx := context.Background()
-    events, err := client.FetchPullRequestEvents(ctx, "owner", "repo", 123)
+    events, err := client.PullRequestEvents(ctx, "owner", "repo", 123)
     if err != nil {
         log.Fatal(err)
     }

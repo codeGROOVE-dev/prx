@@ -43,7 +43,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	
-	events, err := client.FetchPullRequestEvents(ctx, owner, repo, prNumber)
+	events, err := client.PullRequestEvents(ctx, owner, repo, prNumber)
 	if err != nil {
 		log.Fatalf("Failed to fetch PR events: %v", err)
 	}

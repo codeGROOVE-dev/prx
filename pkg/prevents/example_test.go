@@ -20,7 +20,7 @@ func Example() {
 
 	// Fetch events for a pull request
 	ctx := context.Background()
-	events, err := client.FetchPullRequestEvents(ctx, "owner", "repo", 123)
+	events, err := client.PullRequestEvents(ctx, "owner", "repo", 123)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,27 +35,27 @@ func Example() {
 	}
 }
 
-func ExampleClient_FetchPullRequestEvents() {
+func ExampleClient_PullRequestEvents() {
 	// Create a client with custom logger
 	token := os.Getenv("GITHUB_TOKEN")
 	client := prevents.NewClient(token)
 
 	// Fetch all events for PR #123
 	ctx := context.Background()
-	events, err := client.FetchPullRequestEvents(ctx, "golang", "go", 123)
+	events, err := client.PullRequestEvents(ctx, "golang", "go", 123)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Count events by type
-	eventCounts := make(map[prevents.EventType]int)
+	eventCounts := make(map[prevents.EventKind]int)
 	for _, event := range events {
 		eventCounts[event.Kind]++
 	}
 
 	// Print summary
 	fmt.Printf("Total events: %d\n", len(events))
-	for eventType, count := range eventCounts {
-		fmt.Printf("%s: %d\n", eventType, count)
+	for eventKind, count := range eventCounts {
+		fmt.Printf("%s: %d\n", eventKind, count)
 	}
 }

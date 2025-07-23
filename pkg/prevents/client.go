@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/go-github/v57/github"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/errgroup"
 )
 
 // Client provides methods to fetch GitHub pull request events.
@@ -40,51 +42,52 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithHTTPClient sets a custom HTTP client.
+func WithHTTPClient(httpClient *http.Client) Option {
+	return func(c *Client) {
+		// Wrap the transport with retry logic if not already wrapped
+		if httpClient.Transport == nil {
+			httpClient.Transport = &RetryTransport{Base: http.DefaultTransport}
+		} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
+			httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
+		}
+		c.github = github.NewClient(httpClient)
+	}
+}
+
 // NewClient creates a new Client with the given GitHub token.
+// If token is empty, WithHTTPClient option must be provided.
 func NewClient(token string, opts ...Option) *Client {
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: token},
-	)
-	tc := oauth2.NewClient(context.Background(), ts)
-	
-	// Wrap the transport with retry logic
-	tc.Transport = &RetryTransport{Base: tc.Transport}
-	
 	c := &Client{
-		github: github.NewClient(tc),
 		logger: slog.Default(),
 	}
 	
+	// Apply options first to check if custom HTTP client is provided
 	for _, opt := range opts {
 		opt(c)
+	}
+	
+	// If no GitHub client was set by options, create one from token
+	if c.github == nil {
+		if token == "" {
+			panic("prevents: token is required when WithHTTPClient option is not provided")
+		}
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: token},
+		)
+		tc := oauth2.NewClient(context.Background(), ts)
+		
+		// Wrap the transport with retry logic
+		tc.Transport = &RetryTransport{Base: tc.Transport}
+		
+		c.github = github.NewClient(tc)
 	}
 	
 	return c
 }
 
-// NewClientWithHTTP creates a new Client with a custom HTTP client.
-func NewClientWithHTTP(httpClient *http.Client, opts ...Option) *Client {
-	// Wrap the transport with retry logic if not already wrapped
-	if httpClient.Transport == nil {
-		httpClient.Transport = &RetryTransport{Base: http.DefaultTransport}
-	} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
-		httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
-	}
-	
-	c := &Client{
-		github: github.NewClient(httpClient),
-		logger: slog.Default(),
-	}
-	
-	for _, opt := range opts {
-		opt(c)
-	}
-	
-	return c
-}
-
-// FetchPullRequestEvents fetches all events for a pull request and returns them in chronological order.
-func (c *Client) FetchPullRequestEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
+// PullRequestEvents fetches all events for a pull request and returns them in chronological order.
+func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Info("fetching pull request events",
 		"owner", owner,
 		"repo", repo,
@@ -102,83 +105,150 @@ func (c *Client) FetchPullRequestEvents(ctx context.Context, owner, repo string,
 
 	// Add PR opened event
 	events = append(events, Event{
-		Kind:      EventTypePROpened,
+		Kind:      PROpened,
 		Timestamp: pr.GetCreatedAt().Time,
 		Actor:     pr.GetUser().GetLogin(),
 		Bot:       isBot(pr.GetUser()),
 	})
 
 	// Fetch all event types concurrently for better performance
-	type result struct {
-		events []Event
-		err    error
-	}
+	g, gctx := errgroup.WithContext(ctx)
+	var mu sync.Mutex
+	var errors []error
 	
-	results := make(chan result, 8)
-	
-	go func() {
-		e, err := c.fetchCommits(ctx, owner, repo, prNumber)
-		results <- result{e, err}
-	}()
-	
-	go func() {
-		e, err := c.fetchComments(ctx, owner, repo, prNumber)
-		results <- result{e, err}
-	}()
-	
-	go func() {
-		e, err := c.fetchReviews(ctx, owner, repo, prNumber)
-		results <- result{e, err}
-	}()
-	
-	go func() {
-		e, err := c.fetchReviewComments(ctx, owner, repo, prNumber)
-		results <- result{e, err}
-	}()
-	
-	go func() {
-		e, err := c.fetchTimelineEvents(ctx, owner, repo, prNumber)
-		results <- result{e, err}
-	}()
-	
-	go func() {
-		e, err := c.fetchStatusChecks(ctx, owner, repo, pr)
-		results <- result{e, err}
-	}()
-	
-	go func() {
-		e, err := c.fetchCheckRuns(ctx, owner, repo, pr)
-		results <- result{e, err}
-	}()
-	
-	// Collect results - continue on partial failures for graceful degradation
-	var lastErr error
-	for i := 0; i < 7; i++ {
-		r := <-results
-		if r.err != nil {
-			c.logger.Error("failed to fetch events", "error", r.err)
-			lastErr = r.err
-			continue
+	// Fetch commits
+	g.Go(func() error {
+		e, err := c.commits(gctx, owner, repo, prNumber)
+		if err != nil {
+			c.logger.Error("failed to fetch commits", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil // Continue on error for graceful degradation
 		}
-		events = append(events, r.events...)
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Fetch comments
+	g.Go(func() error {
+		e, err := c.comments(gctx, owner, repo, prNumber)
+		if err != nil {
+			c.logger.Error("failed to fetch comments", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil
+		}
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Fetch reviews
+	g.Go(func() error {
+		e, err := c.reviews(gctx, owner, repo, prNumber)
+		if err != nil {
+			c.logger.Error("failed to fetch reviews", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil
+		}
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Fetch review comments
+	g.Go(func() error {
+		e, err := c.reviewComments(gctx, owner, repo, prNumber)
+		if err != nil {
+			c.logger.Error("failed to fetch review comments", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil
+		}
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Fetch timeline events
+	g.Go(func() error {
+		e, err := c.timelineEvents(gctx, owner, repo, prNumber)
+		if err != nil {
+			c.logger.Error("failed to fetch timeline events", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil
+		}
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Fetch status checks
+	g.Go(func() error {
+		e, err := c.statusChecks(gctx, owner, repo, pr)
+		if err != nil {
+			c.logger.Error("failed to fetch status checks", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil
+		}
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Fetch check runs
+	g.Go(func() error {
+		e, err := c.checkRuns(gctx, owner, repo, pr)
+		if err != nil {
+			c.logger.Error("failed to fetch check runs", "error", err)
+			mu.Lock()
+			errors = append(errors, err)
+			mu.Unlock()
+			return nil
+		}
+		mu.Lock()
+		events = append(events, e...)
+		mu.Unlock()
+		return nil
+	})
+	
+	// Wait for all goroutines to complete
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	
 	// Return error only if we have no events at all
-	if len(events) == 0 && lastErr != nil {
-		return nil, fmt.Errorf("failed to fetch any events: %w", lastErr)
+	if len(events) == 0 && len(errors) > 0 {
+		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
 	}
 
 	// Add PR closed/merged event
 	if pr.GetMerged() {
 		events = append(events, Event{
-			Kind:      EventTypePRMerged,
+			Kind:      PRMerged,
 			Timestamp: pr.GetMergedAt().Time,
 			Actor:     pr.GetMergedBy().GetLogin(),
 			Bot:       isBot(pr.GetMergedBy()),
 		})
 	} else if pr.GetState() == "closed" {
 		events = append(events, Event{
-			Kind:      EventTypePRClosed,
+			Kind:      PRClosed,
 			Timestamp: pr.GetClosedAt().Time,
 			Actor:     pr.GetUser().GetLogin(),
 			Bot:       isBot(pr.GetUser()),

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestClient_FetchPullRequestEvents(t *testing.T) {
+func TestClient_PullRequestEvents(t *testing.T) {
 	// Create a test server
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
@@ -87,12 +87,12 @@ func TestClient_FetchPullRequestEvents(t *testing.T) {
 	}
 	
 	// Override the base URL in the client
-	client := NewClientWithHTTP(httpClient)
+	client := NewClient("", WithHTTPClient(httpClient))
 	client.github.BaseURL, _ = url.Parse(server.URL + "/")
 
 	// Test fetching events
 	ctx := context.Background()
-	events, err := client.FetchPullRequestEvents(ctx, "owner", "repo", 1)
+	events, err := client.PullRequestEvents(ctx, "owner", "repo", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestClient_FetchPullRequestEvents(t *testing.T) {
 	}
 
 	// Verify first event is PR opened
-	if events[0].Kind != EventTypePROpened {
+	if events[0].Kind != PROpened {
 		t.Errorf("expected first event to be PR opened, got %s", events[0].Kind)
 	}
 
@@ -118,30 +118,30 @@ func TestClient_FetchPullRequestEvents(t *testing.T) {
 
 func TestEventTypes(t *testing.T) {
 	// Verify event type constants are properly defined
-	eventTypes := []EventType{
-		EventTypeCommit,
-		EventTypeComment,
-		EventTypeReview,
-		EventTypeReviewComment,
-		EventTypeStatusCheck,
-		EventTypeCheckRun,
-		EventTypeCheckSuite,
-		EventTypePROpened,
-		EventTypePRClosed,
-		EventTypePRMerged,
-		EventTypePRReopened,
-		EventTypeAssigned,
-		EventTypeUnassigned,
-		EventTypeLabeled,
-		EventTypeUnlabeled,
-		EventTypeMilestoned,
-		EventTypeDemilestoned,
-		EventTypeReviewRequested,
-		EventTypeReviewRequestRemoved,
+	eventTypes := []EventKind{
+		Commit,
+		Comment,
+		Review,
+		ReviewComment,
+		StatusCheck,
+		CheckRun,
+		CheckSuite,
+		PROpened,
+		PRClosed,
+		PRMerged,
+		PRReopened,
+		Assigned,
+		Unassigned,
+		Labeled,
+		Unlabeled,
+		Milestoned,
+		Demilestoned,
+		ReviewRequested,
+		ReviewRequestRemoved,
 	}
 
 	// Ensure all event types are unique
-	seen := make(map[EventType]bool)
+	seen := make(map[EventKind]bool)
 	for _, et := range eventTypes {
 		if seen[et] {
 			t.Errorf("duplicate event type: %s", et)
