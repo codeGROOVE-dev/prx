@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ready-to-review/prevents/pkg/prevents"
 )
@@ -30,7 +31,7 @@ func main() {
 	}
 
 	// Get GitHub token using gh auth token
-	token, err := getGitHubToken()
+	token, err := githubToken()
 	if err != nil {
 		log.Fatalf("Failed to get GitHub token: %v", err)
 	}
@@ -38,8 +39,10 @@ func main() {
 	// Create client
 	client := prevents.NewClient(token)
 
-	// Fetch events
-	ctx := context.Background()
+	// Fetch events with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	
 	events, err := client.FetchPullRequestEvents(ctx, owner, repo, prNumber)
 	if err != nil {
 		log.Fatalf("Failed to fetch PR events: %v", err)
@@ -54,7 +57,7 @@ func main() {
 	}
 }
 
-func getGitHubToken() (string, error) {
+func githubToken() (string, error) {
 	cmd := exec.Command("gh", "auth", "token")
 	output, err := cmd.Output()
 	if err != nil {

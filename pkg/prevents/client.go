@@ -18,6 +18,18 @@ type Client struct {
 	logger *slog.Logger
 }
 
+// isBot returns true if the user appears to be a bot.
+func isBot(user *github.User) bool {
+	if user == nil {
+		return false
+	}
+	login := user.GetLogin()
+	return user.GetType() == "Bot" ||
+		strings.HasSuffix(login, "-bot") ||
+		strings.HasSuffix(login, "[bot]") ||
+		strings.HasSuffix(login, "-robot")
+}
+
 // Option is a function that configures a Client.
 type Option func(*Client)
 
@@ -30,11 +42,13 @@ func WithLogger(logger *slog.Logger) Option {
 
 // NewClient creates a new Client with the given GitHub token.
 func NewClient(token string, opts ...Option) *Client {
-	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
-	tc := oauth2.NewClient(ctx, ts)
+	tc := oauth2.NewClient(context.Background(), ts)
+	
+	// Wrap the transport with retry logic
+	tc.Transport = &RetryTransport{Base: tc.Transport}
 	
 	c := &Client{
 		github: github.NewClient(tc),
@@ -50,6 +64,13 @@ func NewClient(token string, opts ...Option) *Client {
 
 // NewClientWithHTTP creates a new Client with a custom HTTP client.
 func NewClientWithHTTP(httpClient *http.Client, opts ...Option) *Client {
+	// Wrap the transport with retry logic if not already wrapped
+	if httpClient.Transport == nil {
+		httpClient.Transport = &RetryTransport{Base: http.DefaultTransport}
+	} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
+		httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
+	}
+	
 	c := &Client{
 		github: github.NewClient(httpClient),
 		logger: slog.Default(),
@@ -80,18 +101,12 @@ func (c *Client) FetchPullRequestEvents(ctx context.Context, owner, repo string,
 	}
 
 	// Add PR opened event
-	event := Event{
+	events = append(events, Event{
 		Type:      EventTypePROpened,
 		Timestamp: pr.GetCreatedAt().Time,
 		Actor:     pr.GetUser().GetLogin(),
-	}
-	if pr.GetUser().GetType() == "Bot" || 
-		strings.HasSuffix(pr.GetUser().GetLogin(), "-bot") || 
-		strings.HasSuffix(pr.GetUser().GetLogin(), "[bot]") ||
-		strings.HasSuffix(pr.GetUser().GetLogin(), "-robot") {
-		event.Bot = true
-	}
-	events = append(events, event)
+		Bot:       isBot(pr.GetUser()),
+	})
 
 	// Fetch all event types concurrently for better performance
 	type result struct {
@@ -136,43 +151,38 @@ func (c *Client) FetchPullRequestEvents(ctx context.Context, owner, repo string,
 		results <- result{e, err}
 	}()
 	
-	// Collect results
+	// Collect results - continue on partial failures for graceful degradation
+	var lastErr error
 	for i := 0; i < 7; i++ {
 		r := <-results
 		if r.err != nil {
 			c.logger.Error("failed to fetch events", "error", r.err)
-			return nil, r.err
+			lastErr = r.err
+			continue
 		}
 		events = append(events, r.events...)
+	}
+	
+	// Return error only if we have no events at all
+	if len(events) == 0 && lastErr != nil {
+		return nil, fmt.Errorf("failed to fetch any events: %w", lastErr)
 	}
 
 	// Add PR closed/merged event
 	if pr.GetMerged() {
-		mergeEvent := Event{
+		events = append(events, Event{
 			Type:      EventTypePRMerged,
 			Timestamp: pr.GetMergedAt().Time,
 			Actor:     pr.GetMergedBy().GetLogin(),
-		}
-		if pr.GetMergedBy().GetType() == "Bot" || 
-			strings.HasSuffix(pr.GetMergedBy().GetLogin(), "-bot") || 
-			strings.HasSuffix(pr.GetMergedBy().GetLogin(), "[bot]") ||
-			strings.HasSuffix(pr.GetMergedBy().GetLogin(), "-robot") {
-			mergeEvent.Bot = true
-		}
-		events = append(events, mergeEvent)
+			Bot:       isBot(pr.GetMergedBy()),
+		})
 	} else if pr.GetState() == "closed" {
-		closeEvent := Event{
+		events = append(events, Event{
 			Type:      EventTypePRClosed,
 			Timestamp: pr.GetClosedAt().Time,
 			Actor:     pr.GetUser().GetLogin(),
-		}
-		if pr.GetUser().GetType() == "Bot" || 
-			strings.HasSuffix(pr.GetUser().GetLogin(), "-bot") || 
-			strings.HasSuffix(pr.GetUser().GetLogin(), "[bot]") ||
-			strings.HasSuffix(pr.GetUser().GetLogin(), "-robot") {
-			closeEvent.Bot = true
-		}
-		events = append(events, closeEvent)
+			Bot:       isBot(pr.GetUser()),
+		})
 	}
 
 	// Sort events by timestamp

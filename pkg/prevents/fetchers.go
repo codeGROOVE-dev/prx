@@ -3,30 +3,11 @@ package prevents
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/go-github/v57/github"
 )
 
 const maxPerPage = 100
-
-// isBot checks if a GitHub user is a bot
-func isBot(user *github.User) bool {
-	if user == nil {
-		return false
-	}
-	
-	// Check if explicitly marked as bot
-	if user.GetType() == "Bot" {
-		return true
-	}
-	
-	// Check if username ends with bot patterns
-	login := user.GetLogin()
-	return strings.HasSuffix(login, "-bot") || 
-		strings.HasSuffix(login, "[bot]") || 
-		strings.HasSuffix(login, "-robot")
-}
 
 func (c *Client) fetchCommits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching commits", "owner", owner, "repo", repo, "pr", prNumber)
@@ -201,129 +182,55 @@ func (c *Client) fetchTimelineEvents(ctx context.Context, owner, repo string, pr
 }
 
 func (c *Client) parseTimelineEvent(item *github.Timeline) *Event {
-	switch item.GetEvent() {
-	case "assigned":
-		event := &Event{
-			Type:      EventTypeAssigned,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if item.GetAssignee() != nil {
-			event.Targets = []string{item.GetAssignee().GetLogin()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "unassigned":
-		event := &Event{
-			Type:      EventTypeUnassigned,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if item.GetAssignee() != nil {
-			event.Targets = []string{item.GetAssignee().GetLogin()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "labeled":
-		event := &Event{
-			Type:      EventTypeLabeled,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if item.GetLabel() != nil {
-			event.Targets = []string{item.GetLabel().GetName()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "unlabeled":
-		event := &Event{
-			Type:      EventTypeUnlabeled,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if item.GetLabel() != nil {
-			event.Targets = []string{item.GetLabel().GetName()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "milestoned":
-		event := &Event{
-			Type:      EventTypeMilestoned,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if item.GetMilestone() != nil {
-			event.Targets = []string{item.GetMilestone().GetTitle()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "demilestoned":
-		event := &Event{
-			Type:      EventTypeDemilestoned,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if item.GetMilestone() != nil {
-			event.Targets = []string{item.GetMilestone().GetTitle()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "review_requested":
-		event := &Event{
-			Type:      EventTypeReviewRequested,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		// GitHub API returns reviewer in different fields based on type
-		if item.Reviewer != nil {
-			event.Targets = []string{item.Reviewer.GetLogin()}
-		} else if item.RequestedTeam != nil {
-			event.Targets = []string{item.RequestedTeam.GetName()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "review_request_removed":
-		event := &Event{
-			Type:      EventTypeReviewRequestRemoved,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		// GitHub API returns reviewer in different fields based on type
-		if item.Reviewer != nil {
-			event.Targets = []string{item.Reviewer.GetLogin()}
-		} else if item.RequestedTeam != nil {
-			event.Targets = []string{item.RequestedTeam.GetName()}
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
-	case "reopened":
-		event := &Event{
-			Type:      EventTypePRReopened,
-			Timestamp: item.GetCreatedAt().Time,
-			Actor:     item.GetActor().GetLogin(),
-		}
-		if isBot(item.GetActor()) {
-			event.Bot = true
-		}
-		return event
+	// Map of event types to our event types
+	eventTypeMap := map[string]EventType{
+		"assigned":               EventTypeAssigned,
+		"unassigned":             EventTypeUnassigned,
+		"labeled":                EventTypeLabeled,
+		"unlabeled":              EventTypeUnlabeled,
+		"milestoned":             EventTypeMilestoned,
+		"demilestoned":           EventTypeDemilestoned,
+		"review_requested":       EventTypeReviewRequested,
+		"review_request_removed": EventTypeReviewRequestRemoved,
+		"reopened":               EventTypePRReopened,
 	}
-	return nil
+
+	eventType, ok := eventTypeMap[item.GetEvent()]
+	if !ok {
+		return nil
+	}
+
+	event := &Event{
+		Type:      eventType,
+		Timestamp: item.GetCreatedAt().Time,
+		Actor:     item.GetActor().GetLogin(),
+		Bot:       isBot(item.GetActor()),
+	}
+
+	// Extract targets based on event type
+	switch item.GetEvent() {
+	case "assigned", "unassigned":
+		if item.GetAssignee() != nil {
+			event.Targets = []string{item.GetAssignee().GetLogin()}
+		}
+	case "labeled", "unlabeled":
+		if item.GetLabel() != nil {
+			event.Targets = []string{item.GetLabel().GetName()}
+		}
+	case "milestoned", "demilestoned":
+		if item.GetMilestone() != nil {
+			event.Targets = []string{item.GetMilestone().GetTitle()}
+		}
+	case "review_requested", "review_request_removed":
+		// GitHub API returns reviewer in different fields based on type
+		if item.Reviewer != nil {
+			event.Targets = []string{item.Reviewer.GetLogin()}
+		} else if item.RequestedTeam != nil {
+			event.Targets = []string{item.RequestedTeam.GetName()}
+		}
+	}
+
+	return event
 }
 
 func (c *Client) fetchStatusChecks(ctx context.Context, owner, repo string, pr *github.PullRequest) ([]Event, error) {
