@@ -9,27 +9,24 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/go-github/v57/github"
-	"golang.org/x/oauth2"
 	"golang.org/x/sync/errgroup"
 )
 
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
-	github *github.Client
+	github *githubClient
 	logger *slog.Logger
 }
 
 // isBot returns true if the user appears to be a bot.
-func isBot(user *github.User) bool {
+func isBot(user *githubUser) bool {
 	if user == nil {
 		return false
 	}
-	login := user.GetLogin()
-	return user.GetType() == "Bot" ||
-		strings.HasSuffix(login, "-bot") ||
-		strings.HasSuffix(login, "[bot]") ||
-		strings.HasSuffix(login, "-robot")
+	return user.Type == "Bot" ||
+		strings.HasSuffix(user.Login, "-bot") ||
+		strings.HasSuffix(user.Login, "[bot]") ||
+		strings.HasSuffix(user.Login, "-robot")
 }
 
 // Option is a function that configures a Client.
@@ -51,7 +48,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 		} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
 			httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
 		}
-		c.github = github.NewClient(httpClient)
+		c.github = newGithubClient(httpClient, c.github.token)
 	}
 }
 
@@ -60,31 +57,16 @@ func WithHTTPClient(httpClient *http.Client) Option {
 func NewClient(token string, opts ...Option) *Client {
 	c := &Client{
 		logger: slog.Default(),
+		github: newGithubClient(&http.Client{Transport: &RetryTransport{Base: http.DefaultTransport}}, token),
 	}
-	
-	// Apply options first to check if custom HTTP client is provided
+
 	for _, opt := range opts {
 		opt(c)
 	}
-	
-	// If no GitHub client was set by options, create one from token
-	if c.github == nil {
-		if token == "" {
-			panic("prevents: token is required when WithHTTPClient option is not provided")
-		}
-		ts := oauth2.StaticTokenSource(
-			&oauth2.Token{AccessToken: token},
-		)
-		tc := oauth2.NewClient(context.Background(), ts)
-		
-		// Wrap the transport with retry logic
-		tc.Transport = &RetryTransport{Base: tc.Transport}
-		
-		c.github = github.NewClient(tc)
-	}
-	
+
 	return c
 }
+
 
 // PullRequestEvents fetches all events for a pull request and returns them in chronological order.
 func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
@@ -93,12 +75,13 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		"repo", repo,
 		"pr", prNumber,
 	)
-	
+
 	var events []Event
 
 	// Fetch the pull request to get basic info
-	pr, _, err := c.github.PullRequests.Get(ctx, owner, repo, prNumber)
-	if err != nil {
+	var pr githubPullRequest
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
+	if _, err := c.github.get(ctx, path, &pr); err != nil {
 		c.logger.Error("failed to fetch pull request", "error", err)
 		return nil, fmt.Errorf("fetching pull request: %w", err)
 	}
@@ -106,9 +89,9 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 	// Add PR opened event
 	events = append(events, Event{
 		Kind:      PROpened,
-		Timestamp: pr.GetCreatedAt().Time,
-		Actor:     pr.GetUser().GetLogin(),
-		Bot:       isBot(pr.GetUser()),
+		Timestamp: pr.CreatedAt,
+		Actor:     pr.User.Login,
+		Bot:       isBot(pr.User),
 	})
 
 	// Fetch all event types concurrently for better performance
@@ -198,7 +181,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 	
 	// Fetch status checks
 	g.Go(func() error {
-		e, err := c.statusChecks(gctx, owner, repo, pr)
+		e, err := c.statusChecks(gctx, owner, repo, &pr)
 		if err != nil {
 			c.logger.Error("failed to fetch status checks", "error", err)
 			mu.Lock()
@@ -214,7 +197,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 	
 	// Fetch check runs
 	g.Go(func() error {
-		e, err := c.checkRuns(gctx, owner, repo, pr)
+		e, err := c.checkRuns(gctx, owner, repo, &pr)
 		if err != nil {
 			c.logger.Error("failed to fetch check runs", "error", err)
 			mu.Lock()
@@ -239,19 +222,19 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 	}
 
 	// Add PR closed/merged event
-	if pr.GetMerged() {
+	if pr.Merged {
 		events = append(events, Event{
 			Kind:      PRMerged,
-			Timestamp: pr.GetMergedAt().Time,
-			Actor:     pr.GetMergedBy().GetLogin(),
-			Bot:       isBot(pr.GetMergedBy()),
+			Timestamp: pr.MergedAt,
+			Actor:     pr.MergedBy.Login,
+			Bot:       isBot(pr.MergedBy),
 		})
-	} else if pr.GetState() == "closed" {
+	} else if pr.State == "closed" {
 		events = append(events, Event{
 			Kind:      PRClosed,
-			Timestamp: pr.GetClosedAt().Time,
-			Actor:     pr.GetUser().GetLogin(),
-			Bot:       isBot(pr.GetUser()),
+			Timestamp: pr.ClosedAt,
+			Actor:     pr.User.Login,
+			Bot:       isBot(pr.User),
 		})
 	}
 

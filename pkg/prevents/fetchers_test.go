@@ -3,14 +3,13 @@ package prevents
 import (
 	"log/slog"
 	"testing"
-
-	"github.com/google/go-github/v57/github"
+	"time"
 )
 
 func TestIsBot(t *testing.T) {
 	tests := []struct {
 		name     string
-		user     *github.User
+		user     *githubUser
 		expected bool
 	}{
 		{
@@ -20,49 +19,49 @@ func TestIsBot(t *testing.T) {
 		},
 		{
 			name: "GitHub App bot",
-			user: &github.User{
-				Login: github.String("github-actions"),
-				Type:  github.String("Bot"),
+			user: &githubUser{
+				Login: "github-actions",
+				Type:  "Bot",
 			},
 			expected: true,
 		},
 		{
 			name: "user with -bot suffix",
-			user: &github.User{
-				Login: github.String("dependabot-bot"),
-				Type:  github.String("User"),
+			user: &githubUser{
+				Login: "dependabot-bot",
+				Type:  "User",
 			},
 			expected: true,
 		},
 		{
 			name: "user with [bot] suffix",
-			user: &github.User{
-				Login: github.String("renovate[bot]"),
-				Type:  github.String("User"),
+			user: &githubUser{
+				Login: "renovate[bot]",
+				Type:  "User",
 			},
 			expected: true,
 		},
 		{
 			name: "regular user",
-			user: &github.User{
-				Login: github.String("octocat"),
-				Type:  github.String("User"),
+			user: &githubUser{
+				Login: "octocat",
+				Type:  "User",
 			},
 			expected: false,
 		},
 		{
 			name: "user with -robot suffix",
-			user: &github.User{
-				Login: github.String("k8s-ci-robot"),
-				Type:  github.String("User"),
+			user: &githubUser{
+				Login: "k8s-ci-robot",
+				Type:  "User",
 			},
 			expected: true,
 		},
 		{
 			name: "user with bot in middle of name",
-			user: &github.User{
-				Login: github.String("robot-user"),
-				Type:  github.String("User"),
+			user: &githubUser{
+				Login: "robot-user",
+				Type:  "User",
 			},
 			expected: false,
 		},
@@ -80,59 +79,65 @@ func TestIsBot(t *testing.T) {
 
 func TestParseTimelineEvent_Targets(t *testing.T) {
 	c := &Client{logger: slog.Default()}
-	
+
 	tests := []struct {
 		name            string
-		event           *github.Timeline
+		event           *githubTimelineEvent
 		expectedTargets []string
 	}{
 		{
 			name: "assigned event with target",
-			event: &github.Timeline{
-				Event:     github.String("assigned"),
-				CreatedAt: &github.Timestamp{},
-				Actor:     &github.User{Login: github.String("manager")},
-				Assignee:  &github.User{Login: github.String("developer1")},
+			event: &githubTimelineEvent{
+				Event:     "assigned",
+				CreatedAt: time.Now(),
+				Actor:     &githubUser{Login: "manager"},
+				Assignee:  &githubUser{Login: "developer1"},
 			},
 			expectedTargets: []string{"developer1"},
 		},
 		{
 			name: "review_requested event with user target",
-			event: &github.Timeline{
-				Event:     github.String("review_requested"),
-				CreatedAt: &github.Timestamp{},
-				Actor:     &github.User{Login: github.String("author")},
-				Reviewer:  &github.User{Login: github.String("reviewer1")},
+			event: &githubTimelineEvent{
+				Event:     "review_requested",
+				CreatedAt: time.Now(),
+				Actor:     &githubUser{Login: "author"},
+				Reviewer:  &githubUser{Login: "reviewer1"},
 			},
 			expectedTargets: []string{"reviewer1"},
 		},
 		{
 			name: "review_requested event with team target",
-			event: &github.Timeline{
-				Event:         github.String("review_requested"),
-				CreatedAt:     &github.Timestamp{},
-				Actor:         &github.User{Login: github.String("author")},
-				RequestedTeam: &github.Team{Name: github.String("backend-team")},
+			event: &githubTimelineEvent{
+				Event:     "review_requested",
+				CreatedAt: time.Now(),
+				Actor:     &githubUser{Login: "author"},
+				RequestedTeam: struct {
+					Name string `json:"name"`
+				}{Name: "backend-team"},
 			},
 			expectedTargets: []string{"backend-team"},
 		},
 		{
 			name: "labeled event with target",
-			event: &github.Timeline{
-				Event:     github.String("labeled"),
-				CreatedAt: &github.Timestamp{},
-				Actor:     &github.User{Login: github.String("triager")},
-				Label:     &github.Label{Name: github.String("bug")},
+			event: &githubTimelineEvent{
+				Event:     "labeled",
+				CreatedAt: time.Now(),
+				Actor:     &githubUser{Login: "triager"},
+				Label: struct {
+					Name string `json:"name"`
+				}{Name: "bug"},
 			},
 			expectedTargets: []string{"bug"},
 		},
 		{
 			name: "milestoned event with target",
-			event: &github.Timeline{
-				Event:     github.String("milestoned"),
-				CreatedAt: &github.Timestamp{},
-				Actor:     &github.User{Login: github.String("pm")},
-				Milestone: &github.Milestone{Title: github.String("v2.0 Release")},
+			event: &githubTimelineEvent{
+				Event:     "milestoned",
+				CreatedAt: time.Now(),
+				Actor:     &githubUser{Login: "pm"},
+				Milestone: struct {
+					Title string `json:"title"`
+				}{Title: "v2.0 Release"},
 			},
 			expectedTargets: []string{"v2.0 Release"},
 		},
@@ -144,12 +149,12 @@ func TestParseTimelineEvent_Targets(t *testing.T) {
 			if event == nil {
 				t.Fatal("expected non-nil event")
 			}
-			
+
 			if len(event.Targets) != len(tt.expectedTargets) {
 				t.Errorf("expected %d targets, got %d", len(tt.expectedTargets), len(event.Targets))
 				return
 			}
-			
+
 			for i, target := range event.Targets {
 				if target != tt.expectedTargets[i] {
 					t.Errorf("expected target[%d] = %q, got %q", i, tt.expectedTargets[i], target)
