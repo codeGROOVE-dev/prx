@@ -1,3 +1,6 @@
+// Package prevents provides a client for fetching GitHub pull request events.
+// It includes support for caching API responses to improve performance and
+// reduce API rate limit consumption.
 package prevents
 
 import (
@@ -5,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 
@@ -14,8 +16,9 @@ import (
 
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
-	github *githubClient
+	github githubAPIClient
 	logger *slog.Logger
+	token  string // Store token for recreating client with new transport
 }
 
 // isBot returns true if the user appears to be a bot.
@@ -48,7 +51,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 		} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
 			httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
 		}
-		c.github = newGithubClient(httpClient, c.github.token)
+		c.github = newGithubClient(httpClient, c.token)
 	}
 }
 
@@ -57,6 +60,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 func NewClient(token string, opts ...Option) *Client {
 	c := &Client{
 		logger: slog.Default(),
+		token:  token,
 		github: newGithubClient(&http.Client{Transport: &RetryTransport{Base: http.DefaultTransport}}, token),
 	}
 
@@ -66,7 +70,6 @@ func NewClient(token string, opts ...Option) *Client {
 
 	return c
 }
-
 
 // PullRequestEvents fetches all events for a pull request and returns them in chronological order.
 func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
@@ -98,7 +101,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 	g, gctx := errgroup.WithContext(ctx)
 	var mu sync.Mutex
 	var errors []error
-	
+
 	// Fetch commits
 	g.Go(func() error {
 		e, err := c.commits(gctx, owner, repo, prNumber)
@@ -114,7 +117,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Fetch comments
 	g.Go(func() error {
 		e, err := c.comments(gctx, owner, repo, prNumber)
@@ -130,7 +133,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Fetch reviews
 	g.Go(func() error {
 		e, err := c.reviews(gctx, owner, repo, prNumber)
@@ -146,7 +149,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Fetch review comments
 	g.Go(func() error {
 		e, err := c.reviewComments(gctx, owner, repo, prNumber)
@@ -162,7 +165,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Fetch timeline events
 	g.Go(func() error {
 		e, err := c.timelineEvents(gctx, owner, repo, prNumber)
@@ -178,7 +181,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Fetch status checks
 	g.Go(func() error {
 		e, err := c.statusChecks(gctx, owner, repo, &pr)
@@ -194,7 +197,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Fetch check runs
 	g.Go(func() error {
 		e, err := c.checkRuns(gctx, owner, repo, &pr)
@@ -210,12 +213,12 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 		mu.Unlock()
 		return nil
 	})
-	
+
 	// Wait for all goroutines to complete
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	
+
 	// Return error only if we have no events at all
 	if len(events) == 0 && len(errors) > 0 {
 		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
@@ -239,9 +242,7 @@ func (c *Client) PullRequestEvents(ctx context.Context, owner, repo string, prNu
 	}
 
 	// Sort events by timestamp
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
+	sortEventsByTimestamp(events)
 
 	c.logger.Info("successfully fetched pull request events",
 		"owner", owner,

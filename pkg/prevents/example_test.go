@@ -27,7 +27,7 @@ func Example() {
 
 	// Process events
 	for _, event := range events {
-		fmt.Printf("%s: %s by %s\n", 
+		fmt.Printf("%s: %s by %s\n",
 			event.Timestamp.Format("2006-01-02 15:04:05"),
 			event.Kind,
 			event.Actor,

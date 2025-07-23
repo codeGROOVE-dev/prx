@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -36,14 +37,28 @@ func main() {
 		log.Fatalf("Failed to get GitHub token: %v", err)
 	}
 
-	// Create client
-	client := prevents.NewClient(token)
+	// Get user cache directory
+	userCacheDir, err := os.UserCacheDir()
+	if err != nil {
+		log.Fatalf("Failed to get user cache directory: %v", err)
+	}
+
+	// Create application-specific cache directory
+	cacheDir := filepath.Join(userCacheDir, "prevents")
+
+	// Create cache client
+	client, err := prevents.NewCacheClient(token, cacheDir)
+	if err != nil {
+		log.Fatalf("Failed to create cache client: %v", err)
+	}
 
 	// Fetch events with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	
-	events, err := client.PullRequestEvents(ctx, owner, repo, prNumber)
+
+	// Use time.Now() as reference timestamp, which will invalidate the initial PR request
+	// but subsequent API calls will use the PR's updated_at field
+	events, err := client.PullRequestEvents(ctx, owner, repo, prNumber, time.Now())
 	if err != nil {
 		log.Fatalf("Failed to fetch PR events: %v", err)
 	}

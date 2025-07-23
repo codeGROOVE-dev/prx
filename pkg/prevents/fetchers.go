@@ -14,7 +14,8 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 	page := 1
 
 	for {
-		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?page=%d&per_page=%d", owner, repo, prNumber, page, maxPerPage)
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?page=%d&per_page=%d",
+			owner, repo, prNumber, page, maxPerPage)
 		var commits []*githubPullRequestCommit
 		resp, err := c.github.get(ctx, path, &commits)
 		if err != nil {
@@ -70,8 +71,7 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 				event.Bot = true
 			}
 			// Extract mentions and add to targets
-			mentions := extractMentions(comment.Body)
-			if len(mentions) > 0 {
+			if mentions := extractMentions(comment.Body); len(mentions) > 0 {
 				event.Targets = mentions
 			}
 			events = append(events, event)
@@ -115,8 +115,7 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 					event.Bot = true
 				}
 				// Extract mentions and add to targets
-				mentions := extractMentions(review.Body)
-				if len(mentions) > 0 {
+				if mentions := extractMentions(review.Body); len(mentions) > 0 {
 					event.Targets = mentions
 				}
 				events = append(events, event)
@@ -159,8 +158,7 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 				event.Bot = true
 			}
 			// Extract mentions and add to targets
-			mentions := extractMentions(comment.Body)
-			if len(mentions) > 0 {
+			if mentions := extractMentions(comment.Body); len(mentions) > 0 {
 				event.Targets = mentions
 			}
 			events = append(events, event)
@@ -271,7 +269,7 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 
 	path := fmt.Sprintf("/repos/%s/%s/statuses/%s?per_page=%d", owner, repo, pr.Head.SHA, maxPerPage)
 	var statuses []*githubStatus
-		if _, err := c.github.get(ctx, path, &statuses); err != nil {
+	if _, err := c.github.get(ctx, path, &statuses); err != nil {
 		return nil, fmt.Errorf("fetching status checks: %w", err)
 	}
 
@@ -330,4 +328,3 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 	c.logger.Debug("fetched check runs", "count", len(events))
 	return events, nil
 }
-
