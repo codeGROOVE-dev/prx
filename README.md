@@ -1,36 +1,42 @@
-# prevents
+# prx
 
-A Go library for fetching all GitHub pull request events in chronological order.
+A Go library for efficiently retrieving rich details about GitHub pull requests, including all events in chronological order.
 
 ## Installation
 
 ```bash
-go get github.com/ready-to-review/prevents
+go get github.com/ready-to-review/prx
 ```
 
 ## CLI Usage
 
-The repository includes a command-line tool that outputs PR events as JSON:
+The repository includes a command-line tool that outputs pull request data as JSON:
 
 ```bash
 # Install the CLI tool
-go install github.com/ready-to-review/prevents/cmd/prevents@latest
+go install github.com/ready-to-review/prx/cmd/prx@latest
 
 # Authenticate with GitHub CLI (required)
 gh auth login
 
-# Fetch events for a pull request
-prevents https://github.com/golang/go/pull/12345
+# Fetch pull request data
+prx https://github.com/golang/go/pull/12345
 ```
 
-The CLI outputs one JSON object per line, making it easy to process with tools like `jq`:
+The CLI outputs a single JSON object containing the pull request metadata and all events:
 
 ```bash
-# Count events by type
-prevents https://github.com/golang/go/pull/12345 | jq -r .type | sort | uniq -c
+# Extract just the events
+prx https://github.com/golang/go/pull/12345 | jq '.events[]'
+
+# Count events by kind
+prx https://github.com/golang/go/pull/12345 | jq '.events[].kind' | sort | uniq -c
 
 # Show all review comments
-prevents https://github.com/golang/go/pull/12345 | jq 'select(.type == "review_comment")'
+prx https://github.com/golang/go/pull/12345 | jq '.events[] | select(.kind == "review_comment")'
+
+# Show PR metadata
+prx https://github.com/golang/go/pull/12345 | jq '.pull_request'
 ```
 
 ## Library Usage
@@ -44,78 +50,167 @@ import (
     "log"
     "os"
 
-    "github.com/ready-to-review/prevents/pkg/prevents"
+    "github.com/ready-to-review/prx/pkg/prx"
 )
 
 func main() {
     // Create a client with your GitHub token
     token := os.Getenv("GITHUB_TOKEN")
-    client := prevents.NewClient(token)
+    client := prx.NewClient(token)
 
-    // Fetch events for a pull request
+    // Fetch pull request data
     ctx := context.Background()
-    events, err := client.PullRequestEvents(ctx, "owner", "repo", 123)
+    data, err := client.PullRequest(ctx, "owner", "repo", 123)
     if err != nil {
         log.Fatal(err)
     }
 
+    // Access PR metadata
+    fmt.Printf("PR #%d: %s\n", data.PullRequest.Number, data.PullRequest.Title)
+    fmt.Printf("Author: %s\n", data.PullRequest.Author)
+    fmt.Printf("State: %s\n", data.PullRequest.State)
+
     // Process events
-    for _, event := range events {
-        fmt.Printf("%s: %s\n", event.Timestamp, event.Description)
+    for _, event := range data.Events {
+        fmt.Printf("%s: %s by %s\n", 
+            event.Timestamp.Format("2006-01-02 15:04:05"),
+            event.Kind,
+            event.Actor)
     }
 }
 ```
 
-## Event Structure
+## Data Structure
 
-Each event has a simple, unified structure:
+### Pull Request Data
 
-```json
-{
-  "type": "review",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "actor": "username",
-  "bot": true,              // Only present and true for bot accounts
-  "targets": ["user1"],     // Users/items affected by the action
-  "outcome": "approved",    // For reviews and checks
-  "body": "Looks good!"     // For comments and reviews
+The main response contains:
+
+```go
+type PullRequestData struct {
+    PullRequest PullRequest `json:"pull_request"`
+    Events      []Event     `json:"events"`
 }
 ```
 
-### Targets Field Examples
+### Pull Request Metadata
 
-The `targets` field contains who or what was affected by the action:
+```go
+type PullRequest struct {
+    Number            int        `json:"number"`
+    Title             string     `json:"title"`
+    State             string     `json:"state"`
+    Author            string     `json:"author"`
+    AuthorAssociation string     `json:"author_association"`
+    CreatedAt         time.Time  `json:"created_at"`
+    UpdatedAt         time.Time  `json:"updated_at"`
+    ClosedAt          *time.Time `json:"closed_at,omitempty"`
+    MergedAt          *time.Time `json:"merged_at,omitempty"`
+    MergeableState    string     `json:"mergeable_state"`
+    Additions         int        `json:"additions"`
+    Deletions         int        `json:"deletions"`
+    ChangedFiles      int        `json:"changed_files"`
+    Assignees         []string   `json:"assignees,omitempty"`
+    RequestedReviewers []string  `json:"requested_reviewers,omitempty"`
+    Labels            []string   `json:"labels,omitempty"`
+    Milestone         string     `json:"milestone,omitempty"`
+}
+```
 
-- **Assignments**: `{"type": "assigned", "actor": "manager", "targets": ["developer1"]}`
-- **Review Requests**: `{"type": "review_requested", "actor": "author", "targets": ["reviewer1"]}`
-- **Labels**: `{"type": "labeled", "actor": "triager", "targets": ["bug"]}`
-- **Milestones**: `{"type": "milestoned", "actor": "pm", "targets": ["v2.0 Release"]}`
+### Event Structure
+
+Each event has a unified structure:
+
+```go
+type Event struct {
+    Kind              EventKind  `json:"kind"`
+    Timestamp         time.Time  `json:"timestamp"`
+    Actor             string     `json:"actor"`
+    Bot               bool       `json:"bot,omitempty"`
+    Targets           []string   `json:"targets,omitempty"`
+    Outcome           string     `json:"outcome,omitempty"`
+    Body              string     `json:"body,omitempty"`
+    Question          bool       `json:"question,omitempty"`
+    AuthorAssociation string     `json:"author_association,omitempty"`
+}
+```
+
+### Event Examples
+
+```json
+{
+  "kind": "review",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "actor": "reviewer",
+  "outcome": "approved",
+  "body": "Looks good!",
+  "author_association": "MEMBER"
+}
+
+{
+  "kind": "comment",
+  "timestamp": "2024-01-15T11:00:00Z", 
+  "actor": "user123",
+  "body": "Can we add tests for this?",
+  "question": true,
+  "targets": ["@author"]
+}
+
+{
+  "kind": "labeled",
+  "timestamp": "2024-01-15T09:00:00Z",
+  "actor": "triager",
+  "targets": ["bug", "high-priority"]
+}
+```
 
 ## Event Types
 
-The library fetches the following event types:
+The library fetches the following event kinds:
 
-- **Commits**: All commits in the pull request (body contains commit message)
-- **Comments**: Issue comments on the pull request (body contains comment text)
-- **Reviews**: Review submissions (outcome: "approved", "changes_requested", "commented"; body contains review text)
-- **Review Comments**: Inline code review comments (body contains comment text)
-- **Status Checks**: CI/CD status updates (outcome: "success", "failure", "pending", "error")
-- **Check Runs**: GitHub Actions and other check run results (outcome: "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required")
-- **Timeline Events**: Assignments, labels, milestones, review requests, etc.
-- **PR State Changes**: Opened, closed, merged, reopened
+- **commit**: All commits in the pull request
+- **comment**: Issue comments on the pull request
+- **review**: Review submissions (outcome: "approved", "changes_requested", "commented")
+- **review_comment**: Inline code review comments
+- **status**: CI/CD status updates (outcome: "success", "failure", "pending", "error")
+- **check_run**: GitHub Actions and other check runs
+- **assigned**, **unassigned**: Assignment changes
+- **review_requested**, **review_request_removed**: Review request changes
+- **labeled**, **unlabeled**: Label changes
+- **milestoned**, **demilestoned**: Milestone changes
+- **renamed**: Title changes
+- **opened**, **closed**, **reopened**, **merged**: State changes
 
 ## Features
 
-- Concurrent fetching of different event types for better performance
-- Automatic pagination handling for large pull requests
-- Events returned in chronological order
-- Bot detection (marks events from bots with `"bot": true` - detects GitHub App bots, usernames ending with "-bot", "[bot]", or "-robot")
-- Structured logging support
-- Minimal external dependencies
+- **Concurrent fetching** of different event types for optimal performance
+- **Automatic pagination** handling for large pull requests
+- **Chronological ordering** of all events
+- **Bot detection** (marks events from bots with `"bot": true`)
+- **Mention extraction** (populated in `targets` field for comments/reviews)
+- **Question detection** (marks comments containing questions)
+- **Caching support** via `prx.NewCacheClient()` for reduced API calls
+- **Structured logging** with slog
+- **Retry logic** with exponential backoff for API reliability
+
+## Caching
+
+For applications that need to fetch the same PR data repeatedly:
+
+```go
+// Create a caching client
+cacheDir := "/tmp/prx-cache"
+client, err := prx.NewCacheClient(token, cacheDir)
+
+// Fetch with caching (uses updated_at timestamp for cache invalidation)
+data, err := client.PullRequest(ctx, "owner", "repo", 123, time.Now())
+```
+
+Cache files are automatically cleaned up after 20 days.
 
 ## Authentication
 
-The library requires a GitHub personal access token or GitHub App token with the following permissions:
+The library requires a GitHub personal access token or GitHub App token with:
 - `repo` scope for private repositories
 - `public_repo` scope for public repositories only
 

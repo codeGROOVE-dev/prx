@@ -1,4 +1,4 @@
-module github.com/ready-to-review/prevents
+module github.com/ready-to-review/prx
 
 go 1.23.4
 

@@ -1,6 +1,6 @@
 - Code should be written for simplicity, scalability, security, and reliability
 - Expect that security professionals will be inspecting and attacking this service
-- Go code should be written with best practices in a way that emulates what the Go project itself uses; prioritizing advice mentioned on go.dev, including https://go.dev/wiki/CodeReviewComments and https://go.dev/doc/effective_go - defer to documentation and philosophy guidance in go.dev above all other reference material.
+- Go code should be written with best practices in a way that emulates what the Go project itself uses
 - Go code should incorporate thoughts from Google's style guide: https://google.github.io/styleguide/go/
 - Code should be written with tests and unit testing in mind
 - Code should have as few external dependencies as possible
