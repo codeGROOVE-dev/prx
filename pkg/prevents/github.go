@@ -122,24 +122,27 @@ type githubPullRequestCommit struct {
 
 // githubComment represents a GitHub comment.
 type githubComment struct {
-	User      *githubUser `json:"user"`
-	CreatedAt time.Time   `json:"created_at"`
-	Body      string      `json:"body"`
+	User              *githubUser `json:"user"`
+	CreatedAt         time.Time   `json:"created_at"`
+	Body              string      `json:"body"`
+	AuthorAssociation string      `json:"author_association"`
 }
 
 // githubReview represents a GitHub review.
 type githubReview struct {
-	User        *githubUser `json:"user"`
-	SubmittedAt time.Time   `json:"submitted_at"`
-	State       string      `json:"state"`
-	Body        string      `json:"body"`
+	User              *githubUser `json:"user"`
+	SubmittedAt       time.Time   `json:"submitted_at"`
+	State             string      `json:"state"`
+	Body              string      `json:"body"`
+	AuthorAssociation string      `json:"author_association"`
 }
 
 // githubReviewComment represents a GitHub review comment.
 type githubReviewComment struct {
-	User      *githubUser `json:"user"`
-	CreatedAt time.Time   `json:"created_at"`
-	Body      string      `json:"body"`
+	User              *githubUser `json:"user"`
+	CreatedAt         time.Time   `json:"created_at"`
+	Body              string      `json:"body"`
+	AuthorAssociation string      `json:"author_association"`
 }
 
 // githubTimelineEvent represents a GitHub timeline event.
@@ -184,6 +187,9 @@ type githubCheckRuns struct {
 
 // githubPullRequest represents a GitHub pull request.
 type githubPullRequest struct {
+	Number    int         `json:"number"`
+	Title     string      `json:"title"`
+	Body      string      `json:"body"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	User      *githubUser `json:"user"`
@@ -194,5 +200,19 @@ type githubPullRequest struct {
 	ClosedAt  time.Time   `json:"closed_at"`
 	Head      struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	AuthorAssociation string `json:"author_association"`
+	Mergeable         *bool  `json:"mergeable"`       // Can be true, false, or null
+	MergeableState    string `json:"mergeable_state"` // "clean", "dirty", "blocked", "unstable", "unknown"
+	Draft             bool   `json:"draft"`           // Whether the PR is a draft
+	Additions         int    `json:"additions"`       // Lines added
+	Deletions         int    `json:"deletions"`       // Lines removed
+	ChangedFiles      int    `json:"changed_files"`   // Number of files changed
+	Commits           int    `json:"commits"`         // Number of commits
+	ReviewComments    int    `json:"review_comments"` // Number of review comments
+	Comments          int    `json:"comments"`        // Number of issue comments
 }

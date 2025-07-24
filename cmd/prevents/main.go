@@ -58,17 +58,14 @@ func main() {
 
 	// Use time.Now() as reference timestamp, which will invalidate the initial PR request
 	// but subsequent API calls will use the PR's updated_at field
-	events, err := client.PullRequestEvents(ctx, owner, repo, prNumber, time.Now())
+	data, err := client.PullRequest(ctx, owner, repo, prNumber, time.Now())
 	if err != nil {
-		log.Fatalf("Failed to fetch PR events: %v", err)
+		log.Fatalf("Failed to fetch PR data: %v", err)
 	}
 
-	// Output events as single-line JSON
 	encoder := json.NewEncoder(os.Stdout)
-	for _, event := range events {
-		if err := encoder.Encode(event); err != nil {
-			log.Fatalf("Failed to encode event: %v", err)
-		}
+	if err := encoder.Encode(data); err != nil {
+		log.Fatalf("Failed to encode pull request: %v", err)
 	}
 }
 

@@ -61,11 +61,12 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 
 		for _, comment := range comments {
 			event := Event{
-				Kind:      Comment,
-				Timestamp: comment.CreatedAt,
-				Actor:     comment.User.Login,
-				Body:      comment.Body,
-				Question:  containsQuestion(comment.Body),
+				Kind:              Comment,
+				Timestamp:         comment.CreatedAt,
+				Actor:             comment.User.Login,
+				Body:              comment.Body,
+				Question:          containsQuestion(comment.Body),
+				AuthorAssociation: comment.AuthorAssociation,
 			}
 			if isBot(comment.User) {
 				event.Bot = true
@@ -104,12 +105,13 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 		for _, review := range reviews {
 			if review.State != "" {
 				event := Event{
-					Kind:      Review,
-					Timestamp: review.SubmittedAt,
-					Actor:     review.User.Login,
-					Outcome:   review.State, // "approved", "changes_requested", "commented"
-					Body:      review.Body,
-					Question:  containsQuestion(review.Body),
+					Kind:              Review,
+					Timestamp:         review.SubmittedAt,
+					Actor:             review.User.Login,
+					Outcome:           review.State, // "approved", "changes_requested", "commented"
+					Body:              review.Body,
+					Question:          containsQuestion(review.Body),
+					AuthorAssociation: review.AuthorAssociation,
 				}
 				if isBot(review.User) {
 					event.Bot = true
@@ -148,11 +150,12 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 
 		for _, comment := range comments {
 			event := Event{
-				Kind:      ReviewComment,
-				Timestamp: comment.CreatedAt,
-				Actor:     comment.User.Login,
-				Body:      comment.Body,
-				Question:  containsQuestion(comment.Body),
+				Kind:              ReviewComment,
+				Timestamp:         comment.CreatedAt,
+				Actor:             comment.User.Login,
+				Body:              comment.Body,
+				Question:          containsQuestion(comment.Body),
+				AuthorAssociation: comment.AuthorAssociation,
 			}
 			if isBot(comment.User) {
 				event.Bot = true

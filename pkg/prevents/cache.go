@@ -56,9 +56,9 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 	return cc, nil
 }
 
-// PullRequestEvents fetches events with caching support.
-func (c *CacheClient) PullRequestEvents(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
-	c.logger.Info("fetching pull request events with cache",
+// PullRequest fetches a pull request with all its events and metadata, with caching support.
+func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
+	c.logger.Info("fetching pull request with cache",
 		"owner", owner,
 		"repo", repo,
 		"pr", prNumber,
@@ -72,6 +72,36 @@ func (c *CacheClient) PullRequestEvents(ctx context.Context, owner, repo string,
 	}
 
 	var events []Event
+
+	// Build PullRequest metadata
+	pullRequest := PullRequest{
+		Number:            pr.Number,
+		Title:             pr.Title,
+		Body:              pr.Body,
+		State:             pr.State,
+		Draft:             pr.Draft,
+		Merged:            pr.Merged,
+		Mergeable:         pr.Mergeable,
+		MergeableState:    pr.MergeableState,
+		CreatedAt:         pr.CreatedAt,
+		UpdatedAt:         pr.UpdatedAt,
+		Author:            pr.User.Login,
+		AuthorAssociation: pr.AuthorAssociation,
+		AuthorBot:         isBot(pr.User),
+		Additions:         pr.Additions,
+		Deletions:         pr.Deletions,
+		ChangedFiles:      pr.ChangedFiles,
+	}
+
+	if !pr.ClosedAt.IsZero() {
+		pullRequest.ClosedAt = &pr.ClosedAt
+	}
+	if !pr.MergedAt.IsZero() {
+		pullRequest.MergedAt = &pr.MergedAt
+	}
+	if pr.MergedBy != nil {
+		pullRequest.MergedBy = pr.MergedBy.Login
+	}
 
 	// Add PR opened event
 	events = append(events, Event{
@@ -175,7 +205,7 @@ func (c *CacheClient) PullRequestEvents(ctx context.Context, owner, repo string,
 	// Sort events by timestamp
 	sortEventsByTimestamp(events)
 
-	c.logger.Info("successfully fetched pull request events with cache",
+	c.logger.Info("successfully fetched pull request with cache",
 		"owner", owner,
 		"repo", repo,
 		"pr", prNumber,
@@ -183,7 +213,10 @@ func (c *CacheClient) PullRequestEvents(ctx context.Context, owner, repo string,
 		"cache_hits", len(events)-len(errors),
 	)
 
-	return events, nil
+	return &PullRequestData{
+		PullRequest: pullRequest,
+		Events:      events,
+	}, nil
 }
 
 // cachedPullRequest fetches a pull request with caching.

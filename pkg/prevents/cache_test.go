@@ -69,7 +69,7 @@ func TestCacheClient(t *testing.T) {
 
 	// First request - should hit the API
 	beforeFirstRequest := requestCount
-	events1, err := client.PullRequestEvents(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
+	events1, err := client.PullRequest(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
 	if err != nil {
 		t.Fatalf("First request failed: %v", err)
 	}
@@ -79,13 +79,13 @@ func TestCacheClient(t *testing.T) {
 		t.Error("Expected API requests for first call")
 	}
 
-	if len(events1) < 2 { // At least PR opened and closed events
-		t.Errorf("Expected at least 2 events, got %d", len(events1))
+	if len(events1.Events) < 2 { // At least PR opened and closed events
+		t.Errorf("Expected at least 2 events, got %d", len(events1.Events))
 	}
 
 	// Second request with same reference time - should use cache for most endpoints
 	beforeSecondRequest := requestCount
-	events2, err := client.PullRequestEvents(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
+	events2, err := client.PullRequest(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
 	if err != nil {
 		t.Fatalf("Second request failed: %v", err)
 	}
@@ -97,13 +97,13 @@ func TestCacheClient(t *testing.T) {
 		t.Errorf("Expected at most 1 API request for cached call, got %d", afterSecondRequest-beforeSecondRequest)
 	}
 
-	if len(events1) != len(events2) {
-		t.Errorf("Expected same number of events from cache, got %d vs %d", len(events1), len(events2))
+	if len(events1.Events) != len(events2.Events) {
+		t.Errorf("Expected same number of events from cache, got %d vs %d", len(events1.Events), len(events2.Events))
 	}
 
 	// Third request with future reference time - should hit API again
 	beforeThirdRequest := requestCount
-	_, err = client.PullRequestEvents(ctx, "test", "repo", 1, time.Now().Add(1*time.Hour))
+	_, err = client.PullRequest(ctx, "test", "repo", 1, time.Now().Add(1*time.Hour))
 	if err != nil {
 		t.Fatalf("Third request failed: %v", err)
 	}

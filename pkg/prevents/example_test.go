@@ -20,13 +20,18 @@ func Example() {
 
 	// Fetch events for a pull request
 	ctx := context.Background()
-	events, err := client.PullRequestEvents(ctx, "owner", "repo", 123)
+	data, err := client.PullRequest(ctx, "owner", "repo", 123)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// Show PR metadata
+	fmt.Printf("PR #%d: %s\n", data.PullRequest.Number, data.PullRequest.Title)
+	fmt.Printf("Author: %s (%s)\n", data.PullRequest.Author, data.PullRequest.AuthorAssociation)
+	fmt.Printf("Status: %s, Mergeable: %v\n", data.PullRequest.State, data.PullRequest.MergeableState)
+
 	// Process events
-	for _, event := range events {
+	for _, event := range data.Events {
 		fmt.Printf("%s: %s by %s\n",
 			event.Timestamp.Format("2006-01-02 15:04:05"),
 			event.Kind,
@@ -35,26 +40,33 @@ func Example() {
 	}
 }
 
-func ExampleClient_PullRequestEvents() {
+func ExampleClient_PullRequest() {
 	// Create a client with custom logger
 	token := os.Getenv("GITHUB_TOKEN")
 	client := prevents.NewClient(token)
 
 	// Fetch all events for PR #123
 	ctx := context.Background()
-	events, err := client.PullRequestEvents(ctx, "golang", "go", 123)
+	data, err := client.PullRequest(ctx, "golang", "go", 123)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// Show PR size
+	fmt.Printf("PR #%d: +%d -%d in %d files\n",
+		data.PullRequest.Number,
+		data.PullRequest.Additions,
+		data.PullRequest.Deletions,
+		data.PullRequest.ChangedFiles)
+
 	// Count events by type
 	eventCounts := make(map[prevents.EventKind]int)
-	for _, event := range events {
+	for _, event := range data.Events {
 		eventCounts[event.Kind]++
 	}
 
 	// Print summary
-	fmt.Printf("Total events: %d\n", len(events))
+	fmt.Printf("Total events: %d\n", len(data.Events))
 	for eventKind, count := range eventCounts {
 		fmt.Printf("%s: %d\n", eventKind, count)
 	}

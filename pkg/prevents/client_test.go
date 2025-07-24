@@ -30,21 +30,28 @@ func TestClientWithMock(t *testing.T) {
 	mock := &mockGithubClient{
 		responses: map[string]any{
 			"/repos/owner/repo/pulls/1": githubPullRequest{
+				Number:    1,
+				Title:     "Test PR",
+				Body:      "Test description",
 				CreatedAt: time.Now().Add(-24 * time.Hour),
 				UpdatedAt: time.Now().Add(-1 * time.Hour),
 				User:      &githubUser{Login: "testuser"},
 				State:     "open",
 				Head: struct {
 					SHA string `json:"sha"`
-				}{SHA: "abc123"},
+					Ref string `json:"ref"`
+				}{SHA: "abc123", Ref: "feature-branch"},
+				Base: struct {
+					Ref string `json:"ref"`
+				}{Ref: "main"},
 			},
-			"/repos/owner/repo/pulls/1/commits":           []*githubPullRequestCommit{},
-			"/repos/owner/repo/issues/1/comments":         []*githubComment{},
-			"/repos/owner/repo/pulls/1/reviews":           []*githubReview{},
-			"/repos/owner/repo/pulls/1/comments":          []*githubReviewComment{},
-			"/repos/owner/repo/issues/1/timeline":         []*githubTimelineEvent{},
-			"/repos/owner/repo/statuses/abc123":           []*githubStatus{},
-			"/repos/owner/repo/commits/abc123/check-runs": githubCheckRuns{CheckRuns: []*githubCheckRun{}},
+			"/repos/owner/repo/pulls/1/commits?page=1&per_page=100":    []*githubPullRequestCommit{},
+			"/repos/owner/repo/issues/1/comments?page=1&per_page=100":  []*githubComment{},
+			"/repos/owner/repo/pulls/1/reviews?page=1&per_page=100":    []*githubReview{},
+			"/repos/owner/repo/pulls/1/comments?page=1&per_page=100":   []*githubReviewComment{},
+			"/repos/owner/repo/issues/1/timeline?page=1&per_page=100":  []*githubTimelineEvent{},
+			"/repos/owner/repo/statuses/abc123?per_page=100":           []*githubStatus{},
+			"/repos/owner/repo/commits/abc123/check-runs?per_page=100": githubCheckRuns{CheckRuns: []*githubCheckRun{}},
 		},
 	}
 
@@ -54,26 +61,31 @@ func TestClientWithMock(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	events, err := client.PullRequestEvents(ctx, "owner", "repo", 1)
+	data, err := client.PullRequest(ctx, "owner", "repo", 1)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
+	// Should have PR metadata
+	if data.PullRequest.Number != 1 {
+		t.Errorf("Expected PR number 1, got %d", data.PullRequest.Number)
+	}
+
 	// Should have at least the PR opened event
-	if len(events) < 1 {
-		t.Errorf("Expected at least 1 event, got %d", len(events))
+	if len(data.Events) < 1 {
+		t.Errorf("Expected at least 1 event, got %d", len(data.Events))
 	}
 
 	// Verify API calls were made
 	expectedCalls := []string{
 		"/repos/owner/repo/pulls/1",
-		"/repos/owner/repo/pulls/1/commits",
-		"/repos/owner/repo/issues/1/comments",
-		"/repos/owner/repo/pulls/1/reviews",
-		"/repos/owner/repo/pulls/1/comments",
-		"/repos/owner/repo/issues/1/timeline",
-		"/repos/owner/repo/statuses/abc123",
-		"/repos/owner/repo/commits/abc123/check-runs",
+		"/repos/owner/repo/pulls/1/commits?page=1&per_page=100",
+		"/repos/owner/repo/issues/1/comments?page=1&per_page=100",
+		"/repos/owner/repo/pulls/1/reviews?page=1&per_page=100",
+		"/repos/owner/repo/pulls/1/comments?page=1&per_page=100",
+		"/repos/owner/repo/issues/1/timeline?page=1&per_page=100",
+		"/repos/owner/repo/statuses/abc123?per_page=100",
+		"/repos/owner/repo/commits/abc123/check-runs?per_page=100",
 	}
 
 	if len(mock.calls) != len(expectedCalls) {
