@@ -31,6 +31,32 @@ type PullRequest struct {
 	Additions    int `json:"additions"`     // Lines added
 	Deletions    int `json:"deletions"`     // Lines removed
 	ChangedFiles int `json:"changed_files"` // Number of files changed
+
+	// Current State
+	Assignees          []string `json:"assignees,omitempty"`           // Current assignees
+	RequestedReviewers []string `json:"requested_reviewers,omitempty"` // Users with pending review requests
+	Labels             []string `json:"labels,omitempty"`              // Current labels
+
+	// Test Summary
+	TestSummary *TestSummary `json:"test_summary,omitempty"` // Summary of test results
+
+	// Status Summary
+	StatusSummary *StatusSummary `json:"status_summary,omitempty"` // Summary of all checks (status_check + check_run)
+}
+
+// TestSummary contains aggregate test result counts
+type TestSummary struct {
+	Passing int `json:"passing"` // Number of passing tests
+	Failing int `json:"failing"` // Number of failing tests
+	Pending int `json:"pending"` // Number of pending tests
+}
+
+// StatusSummary contains aggregate status check and check run counts
+type StatusSummary struct {
+	Success int `json:"success"` // Number of successful checks
+	Failure int `json:"failure"` // Number of failed checks
+	Pending int `json:"pending"` // Number of pending checks
+	Neutral int `json:"neutral"` // Number of neutral checks (skipped, cancelled, etc.)
 }
 
 // PullRequestData contains a pull request and all its associated events.

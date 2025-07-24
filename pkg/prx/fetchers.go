@@ -8,27 +8,18 @@ import (
 
 const maxPerPage = 100
 
-// createEvent creates an Event with common fields populated.
 func createEvent(kind EventKind, timestamp time.Time, user *githubUser, body, authorAssoc string) Event {
-	event := Event{
+	body = truncate(body, 256)
+	return Event{
 		Kind:              kind,
 		Timestamp:         timestamp,
 		Actor:             user.Login,
 		Body:              body,
 		Question:          containsQuestion(body),
 		AuthorAssociation: authorAssoc,
+		Bot:               isBot(user),
+		Targets:           extractMentions(body),
 	}
-
-	if isBot(user) {
-		event.Bot = true
-	}
-
-	// Extract mentions and add to targets
-	if mentions := extractMentions(body); len(mentions) > 0 {
-		event.Targets = mentions
-	}
-
-	return event
 }
 
 func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
@@ -51,10 +42,8 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 				Kind:      Commit,
 				Timestamp: commit.Commit.Author.Date,
 				Actor:     commit.Author.Login,
-				Body:      commit.Commit.Message,
-			}
-			if isBot(commit.Author) {
-				event.Bot = true
+				Body:      truncate(commit.Commit.Message, 256),
+				Bot:       isBot(commit.Author),
 			}
 			events = append(events, event)
 		}
@@ -190,20 +179,20 @@ func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumbe
 	return events, nil
 }
 
-func (c *Client) parseTimelineEvent(item *githubTimelineEvent) *Event {
-	// Map of event types to our event types
-	eventTypeMap := map[string]EventKind{
-		"assigned":               Assigned,
-		"unassigned":             Unassigned,
-		"labeled":                Labeled,
-		"unlabeled":              Unlabeled,
-		"milestoned":             Milestoned,
-		"demilestoned":           Demilestoned,
-		"review_requested":       ReviewRequested,
-		"review_request_removed": ReviewRequestRemoved,
-		"reopened":               PRReopened,
-	}
+var eventTypeMap = map[string]EventKind{
+	"assigned":               Assigned,
+	"unassigned":             Unassigned,
+	"labeled":                Labeled,
+	"unlabeled":              Unlabeled,
+	"milestoned":             Milestoned,
+	"demilestoned":           Demilestoned,
+	"review_requested":       ReviewRequested,
+	"review_request_removed": ReviewRequestRemoved,
+	"reopened":               PRReopened,
+	"head_ref_force_pushed":  HeadRefForcePushed,
+}
 
+func (c *Client) parseTimelineEvent(item *githubTimelineEvent) *Event {
 	eventType, ok := eventTypeMap[item.Event]
 	if !ok {
 		return nil
@@ -216,7 +205,6 @@ func (c *Client) parseTimelineEvent(item *githubTimelineEvent) *Event {
 		Bot:       isBot(item.Actor),
 	}
 
-	// Extract targets based on event type
 	switch item.Event {
 	case "assigned", "unassigned":
 		if item.Assignee != nil {
@@ -231,9 +219,8 @@ func (c *Client) parseTimelineEvent(item *githubTimelineEvent) *Event {
 			event.Targets = []string{item.Milestone.Title}
 		}
 	case "review_requested", "review_request_removed":
-		// GitHub API returns reviewer in different fields based on type
-		if item.Reviewer != nil {
-			event.Targets = []string{item.Reviewer.Login}
+		if item.RequestedReviewer != nil {
+			event.Targets = []string{item.RequestedReviewer.Login}
 		} else if item.RequestedTeam.Name != "" {
 			event.Targets = []string{item.RequestedTeam.Name}
 		}
@@ -264,6 +251,7 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 			Timestamp: status.CreatedAt,
 			Actor:     status.Creator.Login,
 			Outcome:   status.State, // "success", "failure", "pending", "error"
+			Body:      status.Context, // The status check name
 		}
 		if isBot(status.Creator) {
 			event.Bot = true
@@ -307,6 +295,7 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 			Timestamp: timestamp,
 			Actor:     actor,
 			Outcome:   checkRun.Conclusion, // "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
+			Body:      checkRun.Name,        // Store check run name in body field
 		}
 		// GitHub Apps are always considered bots
 		if checkRun.App.Owner != nil {

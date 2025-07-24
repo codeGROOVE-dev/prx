@@ -19,8 +19,7 @@ const (
 	maxResponseSize = 10 * 1024 * 1024 // 10MB
 )
 
-// githubAPI defines the interface for GitHub API operations.
-// This interface makes the client testable by allowing mock implementations.
+// githubAPIClient defines the interface for GitHub API operations.
 type githubAPIClient interface {
 	get(ctx context.Context, path string, v any) (*githubResponse, error)
 }
@@ -32,8 +31,6 @@ type githubClient struct {
 	api    string
 }
 
-// Ensure githubClient implements githubAPIClient
-var _ githubAPIClient = (*githubClient)(nil)
 
 // newGithubClient creates a new githubClient.
 func newGithubClient(client *http.Client, token string) *githubClient {
@@ -61,14 +58,12 @@ func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResp
 	slog.Debug("API response", "status", resp.Status, "url", apiURL)
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) // Read limited error body
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		slog.Error("GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
 		return nil, fmt.Errorf("github API error: %s", resp.Status)
 	}
 
-	// Limit response size to prevent memory exhaustion attacks
-	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
-	data, err := io.ReadAll(limitedReader)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, err
 	}
@@ -76,8 +71,9 @@ func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResp
 	if err := json.Unmarshal(data, v); err != nil {
 		return nil, err
 	}
+	
+	slog.Debug("GitHub API response", "path", path, "response", string(data))
 
-	// Extract next page number from Link header
 	nextPageNum := 0
 	linkHeader := resp.Header.Get("Link")
 	links := strings.Split(linkHeader, ",")
@@ -160,21 +156,24 @@ type githubTimelineEvent struct {
 	Milestone struct {
 		Title string `json:"title"`
 	} `json:"milestone"`
-	Reviewer      *githubUser `json:"reviewer"`
-	RequestedTeam struct {
+	RequestedReviewer *githubUser `json:"requested_reviewer"`
+	RequestedTeam     struct {
 		Name string `json:"name"`
 	} `json:"requested_team"`
 }
 
 // githubStatus represents a GitHub status.
 type githubStatus struct {
-	Creator   *githubUser `json:"creator"`
-	CreatedAt time.Time   `json:"created_at"`
-	State     string      `json:"state"`
+	Context     string      `json:"context"`    // The status check name
+	Description string      `json:"description"` // Optional description
+	Creator     *githubUser `json:"creator"`
+	CreatedAt   time.Time   `json:"created_at"`
+	State       string      `json:"state"`
 }
 
 // githubCheckRun represents a GitHub check run.
 type githubCheckRun struct {
+	Name string `json:"name"`
 	App struct {
 		Owner *githubUser `json:"owner"`
 	} `json:"app"`
@@ -215,7 +214,12 @@ type githubPullRequest struct {
 	Additions         int    `json:"additions"`       // Lines added
 	Deletions         int    `json:"deletions"`       // Lines removed
 	ChangedFiles      int    `json:"changed_files"`   // Number of files changed
-	Commits           int    `json:"commits"`         // Number of commits
-	ReviewComments    int    `json:"review_comments"` // Number of review comments
-	Comments          int    `json:"comments"`        // Number of issue comments
+	Commits           int           `json:"commits"`         // Number of commits
+	ReviewComments    int           `json:"review_comments"` // Number of review comments
+	Comments          int           `json:"comments"`        // Number of issue comments
+	Assignees         []*githubUser `json:"assignees"`       // Current assignees
+	RequestedReviewers []*githubUser `json:"requested_reviewers"` // Pending reviewers
+	Labels            []struct {
+		Name string `json:"name"`
+	} `json:"labels"` // PR labels
 }

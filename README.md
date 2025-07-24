@@ -97,23 +97,37 @@ type PullRequestData struct {
 
 ```go
 type PullRequest struct {
-    Number            int        `json:"number"`
-    Title             string     `json:"title"`
-    State             string     `json:"state"`
-    Author            string     `json:"author"`
-    AuthorAssociation string     `json:"author_association"`
-    CreatedAt         time.Time  `json:"created_at"`
-    UpdatedAt         time.Time  `json:"updated_at"`
-    ClosedAt          *time.Time `json:"closed_at,omitempty"`
-    MergedAt          *time.Time `json:"merged_at,omitempty"`
-    MergeableState    string     `json:"mergeable_state"`
-    Additions         int        `json:"additions"`
-    Deletions         int        `json:"deletions"`
-    ChangedFiles      int        `json:"changed_files"`
-    Assignees         []string   `json:"assignees,omitempty"`
-    RequestedReviewers []string  `json:"requested_reviewers,omitempty"`
-    Labels            []string   `json:"labels,omitempty"`
-    Milestone         string     `json:"milestone,omitempty"`
+    Number            int          `json:"number"`
+    Title             string       `json:"title"`
+    State             string       `json:"state"`
+    Author            string       `json:"author"`
+    AuthorAssociation string       `json:"author_association"`
+    CreatedAt         time.Time    `json:"created_at"`
+    UpdatedAt         time.Time    `json:"updated_at"`
+    ClosedAt          *time.Time   `json:"closed_at,omitempty"`
+    MergedAt          *time.Time   `json:"merged_at,omitempty"`
+    MergeableState    string       `json:"mergeable_state"`
+    Additions         int          `json:"additions"`
+    Deletions         int          `json:"deletions"`
+    ChangedFiles      int          `json:"changed_files"`
+    Assignees         []string     `json:"assignees,omitempty"`
+    RequestedReviewers []string    `json:"requested_reviewers,omitempty"`
+    Labels            []string     `json:"labels,omitempty"`
+    TestSummary       *TestSummary   `json:"test_summary,omitempty"`
+    StatusSummary     *StatusSummary `json:"status_summary,omitempty"`
+}
+
+type TestSummary struct {
+    Passing int `json:"passing"`
+    Failing int `json:"failing"`
+    Pending int `json:"pending"`
+}
+
+type StatusSummary struct {
+    Success int `json:"success"`
+    Failure int `json:"failure"`
+    Pending int `json:"pending"`
+    Neutral int `json:"neutral"`
 }
 ```
 
@@ -162,6 +176,15 @@ type Event struct {
   "actor": "triager",
   "targets": ["bug", "high-priority"]
 }
+
+{
+  "kind": "check_run",
+  "timestamp": "2024-01-15T12:00:00Z",
+  "actor": "github-actions",
+  "bot": true,
+  "outcome": "failure",
+  "body": "test"
+}
 ```
 
 ## Event Types
@@ -172,14 +195,15 @@ The library fetches the following event kinds:
 - **comment**: Issue comments on the pull request
 - **review**: Review submissions (outcome: "approved", "changes_requested", "commented")
 - **review_comment**: Inline code review comments
-- **status**: CI/CD status updates (outcome: "success", "failure", "pending", "error")
-- **check_run**: GitHub Actions and other check runs
+- **status_check**: CI/CD status updates (status name in `body` field, outcome: "success", "failure", "pending", "error")
+- **check_run**: GitHub Actions and other check runs (check name in `body` field)
 - **assigned**, **unassigned**: Assignment changes
 - **review_requested**, **review_request_removed**: Review request changes
 - **labeled**, **unlabeled**: Label changes
 - **milestoned**, **demilestoned**: Milestone changes
 - **renamed**: Title changes
 - **opened**, **closed**, **reopened**, **merged**: State changes
+- **head_ref_force_pushed**: Force push to the pull request branch
 
 ## Features
 

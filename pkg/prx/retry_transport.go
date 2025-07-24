@@ -34,13 +34,10 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.Base = http.DefaultTransport
 	}
 
-	// Clone the request body if present, as it can only be read once
 	var bodyBytes []byte
 	if req.Body != nil {
 		var err error
-		// Limit request body size to prevent memory issues
-		limitedReader := io.LimitReader(req.Body, maxRequestSize)
-		bodyBytes, err = io.ReadAll(limitedReader)
+		bodyBytes, err = io.ReadAll(io.LimitReader(req.Body, maxRequestSize))
 		if err != nil {
 			return nil, err
 		}
@@ -64,13 +61,10 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				return err
 			}
 
-			// Retry on rate limit (429) or server errors (5xx)
 			if shouldRetry(resp.StatusCode) {
-				// Preserve response body for caller
 				bodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
 				slog.Debug("Retrying request", "status", resp.StatusCode, "url", req.URL.String())
 				lastErr = &retryableError{StatusCode: resp.StatusCode}
 				return lastErr

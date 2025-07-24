@@ -28,6 +28,7 @@ const (
 	Demilestoned         EventKind = "demilestoned"
 	ReviewRequested      EventKind = "review_requested"
 	ReviewRequestRemoved EventKind = "review_request_removed"
+	HeadRefForcePushed   EventKind = "head_ref_force_pushed"
 )
 
 // Event represents a single event that occurred on a pull request.
@@ -38,7 +39,7 @@ type Event struct {
 	Bot               bool      `json:"bot,omitempty"`                // True if the actor is a bot
 	Targets           []string  `json:"targets,omitempty"`            // Users affected by the action (assignees, reviewers, etc.)
 	Outcome           string    `json:"outcome,omitempty"`            // For checks: "success", "failure", "pending", etc. For reviews: "approved", "changes_requested", "commented"
-	Body              string    `json:"body,omitempty"`               // For comments and reviews
+	Body              string    `json:"body,omitempty"`               // For comments/reviews: the text content. For check runs: the check name
 	Question          bool      `json:"question,omitempty"`           // True if the comment/review contains a question
 	AuthorAssociation string    `json:"author_association,omitempty"` // GitHub author association: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc.
 }

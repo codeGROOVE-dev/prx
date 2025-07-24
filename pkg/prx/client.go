@@ -59,7 +59,6 @@ func WithHTTPClient(httpClient *http.Client) Option {
 // NewClient creates a new Client with the given GitHub token.
 // If token is empty, WithHTTPClient option must be provided.
 func NewClient(token string, opts ...Option) *Client {
-	// Configure optimized transport with connection pooling
 	transport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
@@ -102,7 +101,6 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		return nil, fmt.Errorf("fetching pull request: %w", err)
 	}
 
-	// Log merge status for debugging
 	c.logger.Info("pull request metadata",
 		"mergeable", pr.Mergeable,
 		"mergeable_state", pr.MergeableState,
@@ -112,11 +110,10 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		"changed_files", pr.ChangedFiles,
 		"pr", prNumber)
 
-	// Build PullRequest metadata
 	pullRequest := PullRequest{
 		Number:            pr.Number,
 		Title:             pr.Title,
-		Body:              pr.Body,
+		Body:              truncate(pr.Body, 256),
 		State:             pr.State,
 		Draft:             pr.Draft,
 		Merged:            pr.Merged,
@@ -142,7 +139,24 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		pullRequest.MergedBy = pr.MergedBy.Login
 	}
 
-	// Add PR opened event
+	for _, assignee := range pr.Assignees {
+		if assignee != nil {
+			pullRequest.Assignees = append(pullRequest.Assignees, assignee.Login)
+		}
+	}
+
+	for _, reviewer := range pr.RequestedReviewers {
+		if reviewer != nil {
+			pullRequest.RequestedReviewers = append(pullRequest.RequestedReviewers, reviewer.Login)
+		}
+	}
+
+	for _, label := range pr.Labels {
+		if label.Name != "" {
+			pullRequest.Labels = append(pullRequest.Labels, label.Name)
+		}
+	}
+
 	events = append(events, Event{
 		Kind:      PROpened,
 		Timestamp: pr.CreatedAt,
@@ -150,7 +164,6 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		Bot:       isBot(pr.User),
 	})
 
-	// Fetch all event types concurrently for better performance
 	g, gctx := errgroup.WithContext(ctx)
 	var mu sync.Mutex
 	var errors []error
@@ -163,7 +176,7 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 			mu.Lock()
 			errors = append(errors, err)
 			mu.Unlock()
-			return nil // Continue on error for graceful degradation
+			return nil
 		}
 		mu.Lock()
 		events = append(events, e...)
@@ -267,17 +280,14 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		return nil
 	})
 
-	// Wait for all goroutines to complete
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
-	// Return error only if we have no events at all
 	if len(events) == 0 && len(errors) > 0 {
 		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
 	}
 
-	// Add PR closed/merged event
 	if pr.Merged {
 		events = append(events, Event{
 			Kind:      PRMerged,
@@ -294,8 +304,17 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		})
 	}
 
-	// Sort events by timestamp
 	sortEventsByTimestamp(events)
+
+	testSummary := calculateTestSummary(events)
+	if testSummary.Passing > 0 || testSummary.Failing > 0 || testSummary.Pending > 0 {
+		pullRequest.TestSummary = testSummary
+	}
+
+	statusSummary := calculateStatusSummary(events)
+	if statusSummary.Success > 0 || statusSummary.Failure > 0 || statusSummary.Pending > 0 || statusSummary.Neutral > 0 {
+		pullRequest.StatusSummary = statusSummary
+	}
 
 	c.logger.Info("successfully fetched pull request",
 		"owner", owner,

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,50 +19,65 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <pull-request-url>\n", os.Args[0])
+	debug := flag.Bool("debug", false, "Enable debug logging")
+	noCache := flag.Bool("no-cache", false, "Disable caching")
+	flag.Parse()
+	
+	if *debug {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
+	}
+
+	if flag.NArg() != 1 {
+		fmt.Fprintf(os.Stderr, "Usage: %s [--debug] [--no-cache] <pull-request-url>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Example: %s https://github.com/golang/go/pull/12345\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	prURL := os.Args[1]
+	prURL := flag.Arg(0)
 
-	// Parse the PR URL
 	owner, repo, prNumber, err := parsePRURL(prURL)
 	if err != nil {
 		log.Fatalf("Invalid PR URL: %v", err)
 	}
 
-	// Get GitHub token using gh auth token
 	token, err := githubToken()
 	if err != nil {
 		log.Fatalf("Failed to get GitHub token: %v", err)
 	}
 
-	// Get user cache directory
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
 		log.Fatalf("Failed to get user cache directory: %v", err)
 	}
 
-	// Create application-specific cache directory
 	cacheDir := filepath.Join(userCacheDir, "prx")
 
-	// Create cache client
-	client, err := prx.NewCacheClient(token, cacheDir)
-	if err != nil {
-		log.Fatalf("Failed to create cache client: %v", err)
+	var opts []prx.Option
+	if *debug {
+		opts = append(opts, prx.WithLogger(slog.Default()))
 	}
-
-	// Fetch events with timeout
+	
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Use time.Now() as reference timestamp, which will invalidate the initial PR request
-	// but subsequent API calls will use the PR's updated_at field
-	data, err := client.PullRequest(ctx, owner, repo, prNumber, time.Now())
-	if err != nil {
-		log.Fatalf("Failed to fetch PR data: %v", err)
+	var data *prx.PullRequestData
+	if *noCache {
+		client := prx.NewClient(token, opts...)
+		data, err = client.PullRequest(ctx, owner, repo, prNumber)
+		if err != nil {
+			log.Fatalf("Failed to fetch PR data: %v", err)
+		}
+	} else {
+		client, err := prx.NewCacheClient(token, cacheDir, opts...)
+		if err != nil {
+			log.Fatalf("Failed to create cache client: %v", err)
+		}
+		data, err = client.PullRequest(ctx, owner, repo, prNumber, time.Now())
+		if err != nil {
+			log.Fatalf("Failed to fetch PR data: %v", err)
+		}
 	}
 
 	encoder := json.NewEncoder(os.Stdout)
@@ -94,7 +111,6 @@ func parsePRURL(prURL string) (owner, repo string, prNumber int, err error) {
 		return "", "", 0, fmt.Errorf("not a GitHub URL")
 	}
 
-	// Expected format: /owner/repo/pull/number
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) != 4 || parts[2] != "pull" {
 		return "", "", 0, fmt.Errorf("invalid PR URL format")

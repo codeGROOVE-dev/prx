@@ -98,10 +98,10 @@ func TestParseTimelineEvent_Targets(t *testing.T) {
 		{
 			name: "review_requested event with user target",
 			event: &githubTimelineEvent{
-				Event:     "review_requested",
-				CreatedAt: time.Now(),
-				Actor:     &githubUser{Login: "author"},
-				Reviewer:  &githubUser{Login: "reviewer1"},
+				Event:             "review_requested",
+				CreatedAt:         time.Now(),
+				Actor:             &githubUser{Login: "author"},
+				RequestedReviewer: &githubUser{Login: "reviewer1"},
 			},
 			expectedTargets: []string{"reviewer1"},
 		},

@@ -6,11 +6,8 @@ import (
 	"strings"
 )
 
-// mentionRegex matches GitHub usernames in the format @username
-// GitHub usernames can contain alphanumeric characters and hyphens, but not consecutive hyphens
 var mentionRegex = regexp.MustCompile(`(?:^|[^a-zA-Z0-9])@([a-zA-Z0-9][a-zA-Z0-9\-]{0,38}[a-zA-Z0-9]|[a-zA-Z0-9])`)
 
-// questionPatterns contains common patterns that indicate a question or request for advice
 var questionPatterns = []string{
 	"how can",
 	"how do",
@@ -40,7 +37,6 @@ var questionPatterns = []string{
 	"need help",
 }
 
-// extractMentions extracts all @username mentions from a text string
 func extractMentions(text string) []string {
 	matches := mentionRegex.FindAllStringSubmatch(text, -1)
 	mentions := make([]string, 0, len(matches))
@@ -59,36 +55,26 @@ func extractMentions(text string) []string {
 	return mentions
 }
 
-// containsQuestion checks if the text contains patterns that indicate a question or request for advice
 func containsQuestion(text string) bool {
-	// Check for question mark first (fast path)
 	if strings.Contains(text, "?") {
 		return true
 	}
-
-	// Convert to lowercase only if needed for pattern matching
 	lowerText := strings.ToLower(text)
-
-	// Check for common question patterns
 	for _, pattern := range questionPatterns {
 		if strings.Contains(lowerText, pattern) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// sortEventsByTimestamp sorts events by timestamp in ascending order.
 func sortEventsByTimestamp(events []Event) {
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Timestamp.Before(events[j].Timestamp)
 	})
 }
 
-// isHexString checks if a string contains only hexadecimal characters.
 func isHexString(s string) bool {
-	// Performance optimization: work with bytes instead of runes for ASCII-only hex strings
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
@@ -96,4 +82,62 @@ func isHexString(s string) bool {
 		}
 	}
 	return true
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
+func calculateTestSummary(events []Event) *TestSummary {
+	summary := &TestSummary{}
+	checkStates := make(map[string]string)
+	
+	for _, event := range events {
+		if event.Kind == CheckRun && event.Body != "" {
+			checkStates[event.Body] = event.Outcome
+		}
+	}
+	
+	for _, outcome := range checkStates {
+		switch outcome {
+		case "success":
+			summary.Passing++
+		case "failure", "timed_out", "action_required":
+			summary.Failing++
+		case "", "neutral", "cancelled", "skipped", "stale", "queued", "in_progress", "pending":
+			summary.Pending++
+		}
+	}
+	
+	return summary
+}
+
+func calculateStatusSummary(events []Event) *StatusSummary {
+	summary := &StatusSummary{}
+	checkStates := make(map[string]string)
+	
+	for _, event := range events {
+		if (event.Kind == StatusCheck || event.Kind == CheckRun) && event.Body != "" {
+			key := string(event.Kind) + ":" + event.Body
+			checkStates[key] = event.Outcome
+		}
+	}
+	
+	for _, outcome := range checkStates {
+		switch outcome {
+		case "success":
+			summary.Success++
+		case "failure", "error", "timed_out", "action_required":
+			summary.Failure++
+		case "pending", "queued", "in_progress", "waiting":
+			summary.Pending++
+		case "neutral", "cancelled", "skipped", "stale":
+			summary.Neutral++
+		}
+	}
+	
+	return summary
 }

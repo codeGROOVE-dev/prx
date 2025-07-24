@@ -37,13 +37,11 @@ type cachePullRequest struct {
 
 // NewCacheClient creates a new caching client with the given cache directory.
 func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
-	// Validate cache directory path to prevent directory traversal
 	cleanPath := filepath.Clean(cacheDir)
 	if !filepath.IsAbs(cleanPath) {
 		return nil, fmt.Errorf("cache directory must be absolute path")
 	}
 
-	// Ensure cache directory exists with secure permissions
 	if err := os.MkdirAll(cleanPath, 0700); err != nil {
 		return nil, fmt.Errorf("creating cache directory: %w", err)
 	}
@@ -55,7 +53,6 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 		cacheDir: cleanPath,
 	}
 
-	// Clean up old caches on creation
 	go cc.cleanOldCaches()
 
 	return cc, nil
@@ -70,7 +67,6 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		"reference_time", referenceTime,
 	)
 
-	// First, fetch the pull request itself
 	pr, err := c.cachedPullRequest(ctx, owner, repo, prNumber, referenceTime)
 	if err != nil {
 		return nil, fmt.Errorf("fetching pull request: %w", err)
@@ -78,7 +74,6 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 
 	var events []Event
 
-	// Build PullRequest metadata
 	pullRequest := PullRequest{
 		Number:            pr.Number,
 		Title:             pr.Title,
@@ -108,7 +103,6 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		pullRequest.MergedBy = pr.MergedBy.Login
 	}
 
-	// Add PR opened event
 	events = append(events, Event{
 		Kind:      PROpened,
 		Timestamp: pr.CreatedAt,
@@ -116,10 +110,8 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		Bot:       isBot(pr.User),
 	})
 
-	// For all other API calls, use the PR's updated_at timestamp as reference
 	prUpdatedAt := pr.UpdatedAt
 
-	// Fetch all event types using cached versions
 	var errors []error
 
 	// Commits
@@ -185,12 +177,10 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		events = append(events, checkRuns...)
 	}
 
-	// Return error only if we have no events at all
 	if len(events) == 0 && len(errors) > 0 {
 		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
 	}
 
-	// Add PR closed/merged event
 	if pr.Merged {
 		events = append(events, Event{
 			Kind:      PRMerged,
@@ -207,7 +197,6 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		})
 	}
 
-	// Sort events by timestamp
 	sortEventsByTimestamp(events)
 
 	c.logger.Info("successfully fetched pull request with cache",
@@ -228,10 +217,8 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*githubPullRequest, error) {
 	cacheKey := c.cacheKey("pr", owner, repo, fmt.Sprintf("%d", prNumber))
 
-	// Try to load from cache
 	var cached cachePullRequest
 	if c.loadCache(cacheKey, &cached) {
-		// For the initial PR request, use referenceTime to determine validity
 		if cached.CachedAt.After(referenceTime) || cached.CachedAt.Equal(referenceTime) {
 			return &cached.PR, nil
 		}
@@ -250,7 +237,6 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 		return nil, err
 	}
 
-	// Save to cache
 	cached = cachePullRequest{
 		PR:       pr,
 		CachedAt: time.Now(),
@@ -266,12 +252,11 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 func (c *CacheClient) cachedFetch(ctx context.Context, dataType, endpoint string, referenceTime time.Time, fetcher func() (interface{}, error)) (interface{}, error) {
 	cacheKey := c.cacheKey(dataType, endpoint)
 
-	// Try to load from cache
 	var cached cacheEntry
 	if c.loadCache(cacheKey, &cached) {
 		if cached.UpdatedAt.After(referenceTime) || cached.UpdatedAt.Equal(referenceTime) {
 			c.logger.Debug("cache hit", "type", dataType, "endpoint", endpoint, "cached_at", cached.CachedAt)
-			// Use json.RawMessage to avoid double unmarshaling
+			c.logger.Debug("cached response", "type", dataType, "endpoint", endpoint, "response", string(cached.Data))
 			return cached.Data, nil
 		}
 		c.logCacheMiss(dataType, "", "", 0, true, cached.UpdatedAt, referenceTime)
@@ -285,7 +270,6 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, endpoint string
 		return nil, err
 	}
 
-	// Save to cache
 	data, err := json.Marshal(result)
 	if err != nil {
 		c.logger.Warn("failed to marshal for cache", "type", dataType, "error", err)
@@ -304,7 +288,6 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, endpoint string
 	return result, nil
 }
 
-// unmarshalCachedEvents converts the cached result to []Event
 func unmarshalCachedEvents(result interface{}, eventType string) ([]Event, error) {
 	if data, ok := result.(json.RawMessage); ok {
 		var events []Event
@@ -400,7 +383,6 @@ func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, p
 	return unmarshalCachedEvents(result, "check runs")
 }
 
-// logCacheMiss logs cache miss with appropriate context
 func (c *CacheClient) logCacheMiss(resourceType string, owner, repo string, prNumber int, cached bool, cachedAt, referenceTime time.Time) {
 	if cached {
 		c.logger.Debug("cache miss: "+resourceType+" expired",
@@ -417,15 +399,12 @@ func (c *CacheClient) logCacheMiss(resourceType string, owner, repo string, prNu
 	}
 }
 
-// cacheKey generates a unique cache key for the given parameters.
 func (c *CacheClient) cacheKey(parts ...string) string {
-	// Use SHA256 to ensure consistent, safe filenames
 	key := strings.Join(parts, "/")
 	hash := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", hash)
 }
 
-// loadCache loads cached data from disk.
 func (c *CacheClient) loadCache(key string, v any) bool {
 	path := filepath.Join(c.cacheDir, key+".json")
 
@@ -446,16 +425,13 @@ func (c *CacheClient) loadCache(key string, v any) bool {
 	return true
 }
 
-// saveCache saves data to disk cache.
 func (c *CacheClient) saveCache(key string, v any) error {
-	// Validate key format (should be hex string from SHA256)
 	if len(key) != 64 || !isHexString(key) {
 		return fmt.Errorf("invalid cache key format")
 	}
 
 	path := filepath.Join(c.cacheDir, key+".json")
 
-	// Create temporary file with secure permissions
 	tmpPath := path + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
@@ -475,7 +451,6 @@ func (c *CacheClient) saveCache(key string, v any) error {
 		return fmt.Errorf("closing cache file: %w", err)
 	}
 
-	// Atomically replace the old file
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("renaming cache file: %w", err)
@@ -484,7 +459,6 @@ func (c *CacheClient) saveCache(key string, v any) error {
 	return nil
 }
 
-// cleanOldCaches removes cache files older than 20 days.
 func (c *CacheClient) cleanOldCaches() {
 	c.logger.Debug("cleaning old cache files")
 
