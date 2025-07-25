@@ -197,6 +197,9 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		})
 	}
 
+	// Filter events to exclude non-failure status_check events
+	events = filterEvents(events)
+
 	sortEventsByTimestamp(events)
 
 	c.logger.Info("successfully fetched pull request with cache",

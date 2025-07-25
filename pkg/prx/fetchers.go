@@ -41,10 +41,18 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 			event := Event{
 				Kind:      Commit,
 				Timestamp: commit.Commit.Author.Date,
-				Actor:     commit.Author.Login,
 				Body:      truncate(commit.Commit.Message, 256),
-				Bot:       isBot(commit.Author),
 			}
+			
+			// Handle case where commit.Author might be nil
+			if commit.Author != nil {
+				event.Actor = commit.Author.Login
+				event.Bot = isBot(commit.Author)
+			} else {
+				// When GitHub can't associate a commit with a user (e.g., different email)
+				event.Actor = "unknown"
+			}
+			
 			events = append(events, event)
 		}
 

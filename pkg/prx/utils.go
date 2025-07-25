@@ -141,3 +141,22 @@ func calculateStatusSummary(events []Event) *StatusSummary {
 	
 	return summary
 }
+
+func filterEvents(events []Event) []Event {
+	filtered := make([]Event, 0, len(events))
+	
+	for _, event := range events {
+		// Include all non-status_check events
+		if event.Kind != StatusCheck {
+			filtered = append(filtered, event)
+			continue
+		}
+		
+		// For status_check events, only include if outcome is failure
+		if event.Outcome == "failure" {
+			filtered = append(filtered, event)
+		}
+	}
+	
+	return filtered
+}

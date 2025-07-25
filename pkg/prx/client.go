@@ -304,6 +304,9 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		})
 	}
 
+	// Filter events to exclude non-failure status_check events
+	events = filterEvents(events)
+
 	sortEventsByTimestamp(events)
 
 	testSummary := calculateTestSummary(events)
