@@ -22,6 +22,7 @@ const (
 // githubAPIClient defines the interface for GitHub API operations.
 type githubAPIClient interface {
 	get(ctx context.Context, path string, v any) (*githubResponse, error)
+	getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error)
 }
 
 // githubClient is a client for interacting with the GitHub API.
@@ -72,7 +73,6 @@ func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResp
 		return nil, err
 	}
 	
-	slog.Debug("GitHub API response", "path", path, "response", string(data))
 
 	nextPageNum := 0
 	linkHeader := resp.Header.Get("Link")
@@ -90,6 +90,58 @@ func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResp
 	}
 
 	return &githubResponse{
+		NextPage: nextPageNum,
+	}, nil
+}
+
+// getRaw makes a GET request to the GitHub API and returns the raw JSON response.
+func (c *githubClient) getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
+	apiURL := c.api + path
+	slog.Debug("API request", "method", "GET", "url", apiURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	slog.Debug("API response", "status", resp.Status, "url", apiURL)
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		slog.Error("GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
+		return nil, nil, fmt.Errorf("github API error: %s", resp.Status)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	if err != nil {
+		return nil, nil, err
+	}
+
+
+	nextPageNum := 0
+	linkHeader := resp.Header.Get("Link")
+	links := strings.Split(linkHeader, ",")
+	for _, link := range links {
+		parts := strings.Split(strings.TrimSpace(link), ";")
+		if len(parts) == 2 && strings.TrimSpace(parts[1]) == `rel="next"` {
+			u, err := url.Parse(strings.Trim(parts[0], "<>"))
+			if err == nil {
+				page := u.Query().Get("page")
+				nextPageNum, _ = strconv.Atoi(page)
+			}
+			break
+		}
+	}
+
+	return json.RawMessage(data), &githubResponse{
 		NextPage: nextPageNum,
 	}, nil
 }
@@ -169,6 +221,7 @@ type githubStatus struct {
 	Creator     *githubUser `json:"creator"`
 	CreatedAt   time.Time   `json:"created_at"`
 	State       string      `json:"state"`
+	TargetURL   string      `json:"target_url"`
 }
 
 // githubCheckRun represents a GitHub check run.
@@ -180,6 +233,8 @@ type githubCheckRun struct {
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`
 	Conclusion  string    `json:"conclusion"`
+	Status      string    `json:"status"`
+	HTMLURL     string    `json:"html_url"`
 }
 
 // githubCheckRuns represents a list of GitHub check runs.

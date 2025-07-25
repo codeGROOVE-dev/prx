@@ -26,6 +26,18 @@ func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*github
 	return &githubResponse{NextPage: 0}, nil
 }
 
+func (m *mockGithubClient) getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
+	m.calls = append(m.calls, path)
+
+	if response, ok := m.responses[path]; ok {
+		data, _ := json.Marshal(response)
+		return json.RawMessage(data), &githubResponse{NextPage: 0}, nil
+	}
+
+	// Return empty array for paginated endpoints
+	return json.RawMessage("[]"), &githubResponse{NextPage: 0}, nil
+}
+
 func TestClientWithMock(t *testing.T) {
 	mock := &mockGithubClient{
 		responses: map[string]any{

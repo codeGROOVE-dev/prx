@@ -29,12 +29,6 @@ type cacheEntry struct {
 	CachedAt  time.Time       `json:"cached_at"`
 }
 
-// cachePullRequest stores the pull request data with cache metadata.
-type cachePullRequest struct {
-	PR       githubPullRequest `json:"pr"`
-	CachedAt time.Time         `json:"cached_at"`
-}
-
 // NewCacheClient creates a new caching client with the given cache directory.
 func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
 	cleanPath := filepath.Clean(cacheDir)
@@ -57,6 +51,7 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 
 	return cc, nil
 }
+
 
 // PullRequest fetches a pull request with all its events and metadata, with caching support.
 func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
@@ -220,10 +215,15 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*githubPullRequest, error) {
 	cacheKey := c.cacheKey("pr", owner, repo, fmt.Sprintf("%d", prNumber))
 
-	var cached cachePullRequest
+	var cached cacheEntry
 	if c.loadCache(cacheKey, &cached) {
 		if cached.CachedAt.After(referenceTime) || cached.CachedAt.Equal(referenceTime) {
-			return &cached.PR, nil
+			var pr githubPullRequest
+			if err := json.Unmarshal(cached.Data, &pr); err != nil {
+				c.logger.Warn("failed to unmarshal cached pull request", "error", err)
+			} else {
+				return &pr, nil
+			}
 		}
 		c.logger.Info("cache miss: pull request expired",
 			"owner", owner,
@@ -234,15 +234,21 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 	}
 
 	// Fetch from API
-	var pr githubPullRequest
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
-	if _, err := c.github.get(ctx, path, &pr); err != nil {
+	rawData, _, err := c.github.getRaw(ctx, path)
+	if err != nil {
 		return nil, err
 	}
 
-	cached = cachePullRequest{
-		PR:       pr,
-		CachedAt: time.Now(),
+	var pr githubPullRequest
+	if err := json.Unmarshal(rawData, &pr); err != nil {
+		return nil, fmt.Errorf("unmarshaling pull request: %w", err)
+	}
+
+	cached = cacheEntry{
+		Data:      rawData,
+		CachedAt:  time.Now(),
+		UpdatedAt: pr.UpdatedAt,
 	}
 	if err := c.saveCache(cacheKey, cached); err != nil {
 		c.logger.Warn("failed to save pull request to cache", "error", err)
@@ -252,35 +258,28 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 }
 
 // cachedFetch is a generic function for fetching data with caching support.
-func (c *CacheClient) cachedFetch(ctx context.Context, dataType, endpoint string, referenceTime time.Time, fetcher func() (interface{}, error)) (interface{}, error) {
-	cacheKey := c.cacheKey(dataType, endpoint)
+func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, referenceTime time.Time) (json.RawMessage, error) {
+	cacheKey := c.cacheKey(dataType, path)
 
 	var cached cacheEntry
 	if c.loadCache(cacheKey, &cached) {
 		if cached.UpdatedAt.After(referenceTime) || cached.UpdatedAt.Equal(referenceTime) {
-			c.logger.Debug("cache hit", "type", dataType, "endpoint", endpoint, "cached_at", cached.CachedAt)
-			c.logger.Debug("cached response", "type", dataType, "endpoint", endpoint, "response", string(cached.Data))
+			c.logger.Debug("cache hit", "type", dataType, "path", path, "cached_at", cached.CachedAt)
 			return cached.Data, nil
 		}
-		c.logCacheMiss(dataType, "", "", 0, true, cached.UpdatedAt, referenceTime)
+		c.logger.Debug("cache miss: "+dataType+" expired", "cached_at", cached.UpdatedAt, "reference_time", referenceTime)
 	} else {
-		c.logCacheMiss(dataType, "", "", 0, false, time.Time{}, referenceTime)
+		c.logger.Debug("cache miss: "+dataType+" not found")
 	}
 
 	// Fetch from API
-	result, err := fetcher()
+	rawData, _, err := c.github.getRaw(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 
-	data, err := json.Marshal(result)
-	if err != nil {
-		c.logger.Warn("failed to marshal for cache", "type", dataType, "error", err)
-		return result, nil
-	}
-
 	cached = cacheEntry{
-		Data:      data,
+		Data:      rawData,
 		UpdatedAt: referenceTime,
 		CachedAt:  time.Now(),
 	}
@@ -288,119 +287,336 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, endpoint string
 		c.logger.Warn("failed to save to cache", "type", dataType, "error", err)
 	}
 
-	return result, nil
+	return rawData, nil
 }
 
-func unmarshalCachedEvents(result interface{}, eventType string) ([]Event, error) {
-	if data, ok := result.(json.RawMessage); ok {
-		var events []Event
-		if err := json.Unmarshal(data, &events); err != nil {
-			return nil, fmt.Errorf("unmarshaling cached %s: %w", eventType, err)
-		}
-		return events, nil
-	}
-	return result.([]Event), nil
-}
 
 // cachedCommits fetches commits with caching.
 func (c *CacheClient) cachedCommits(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/pulls/%d/commits", owner, repo, prNumber)
-	result, err := c.cachedFetch(ctx, "commits", endpoint, referenceTime, func() (interface{}, error) {
-		return c.commits(ctx, owner, repo, prNumber)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?page=%d&per_page=%d",
+			owner, repo, prNumber, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "commits", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var commits []*githubPullRequestCommit
+		if err := json.Unmarshal(rawData, &commits); err != nil {
+			return nil, fmt.Errorf("unmarshaling commits: %w", err)
+		}
+
+		// Process commits into events
+		for _, commit := range commits {
+			event := Event{
+				Kind:      Commit,
+				Timestamp: commit.Commit.Author.Date,
+				Body:      truncate(commit.Commit.Message, 256),
+			}
+			
+			if commit.Author != nil {
+				event.Actor = commit.Author.Login
+				event.Bot = isBot(commit.Author)
+			} else {
+				event.Actor = "unknown"
+			}
+			
+			allEvents = append(allEvents, event)
+		}
+
+		// Check if there are more pages - if we got less than maxPerPage, we're done
+		if len(commits) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "commits")
+
+	return allEvents, nil
 }
 
 // cachedComments fetches comments with caching.
 func (c *CacheClient) cachedComments(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/issues/%d/comments", owner, repo, prNumber)
-	result, err := c.cachedFetch(ctx, "comments", endpoint, referenceTime, func() (interface{}, error) {
-		return c.comments(ctx, owner, repo, prNumber)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments?page=%d&per_page=%d",
+			owner, repo, prNumber, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "comments", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var comments []*githubComment
+		if err := json.Unmarshal(rawData, &comments); err != nil {
+			return nil, fmt.Errorf("unmarshaling comments: %w", err)
+		}
+
+		for _, comment := range comments {
+			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body, comment.AuthorAssociation)
+			allEvents = append(allEvents, event)
+		}
+
+		if len(comments) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "comments")
+
+	return allEvents, nil
 }
 
 // cachedReviews fetches reviews with caching.
 func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/pulls/%d/reviews", owner, repo, prNumber)
-	result, err := c.cachedFetch(ctx, "reviews", endpoint, referenceTime, func() (interface{}, error) {
-		return c.reviews(ctx, owner, repo, prNumber)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?page=%d&per_page=%d",
+			owner, repo, prNumber, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "reviews", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var reviews []*githubReview
+		if err := json.Unmarshal(rawData, &reviews); err != nil {
+			return nil, fmt.Errorf("unmarshaling reviews: %w", err)
+		}
+
+		for _, review := range reviews {
+			if review.State != "" {
+				event := createEvent(Review, review.SubmittedAt, review.User, review.Body, review.AuthorAssociation)
+				event.Outcome = review.State // "approved", "changes_requested", "commented"
+				allEvents = append(allEvents, event)
+			}
+		}
+
+		if len(reviews) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "reviews")
+
+	return allEvents, nil
 }
 
 // cachedReviewComments fetches review comments with caching.
 func (c *CacheClient) cachedReviewComments(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/pulls/%d/comments", owner, repo, prNumber)
-	result, err := c.cachedFetch(ctx, "review_comments", endpoint, referenceTime, func() (interface{}, error) {
-		return c.reviewComments(ctx, owner, repo, prNumber)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?page=%d&per_page=%d",
+			owner, repo, prNumber, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "review_comments", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var comments []*githubReviewComment
+		if err := json.Unmarshal(rawData, &comments); err != nil {
+			return nil, fmt.Errorf("unmarshaling review comments: %w", err)
+		}
+
+		for _, comment := range comments {
+			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body, comment.AuthorAssociation)
+			allEvents = append(allEvents, event)
+		}
+
+		if len(comments) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "review comments")
+
+	return allEvents, nil
 }
 
 // cachedTimelineEvents fetches timeline events with caching.
 func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/issues/%d/timeline", owner, repo, prNumber)
-	result, err := c.cachedFetch(ctx, "timeline", endpoint, referenceTime, func() (interface{}, error) {
-		return c.timelineEvents(ctx, owner, repo, prNumber)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline?page=%d&per_page=%d",
+			owner, repo, prNumber, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "timeline", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var timelineEvents []*githubTimelineEvent
+		if err := json.Unmarshal(rawData, &timelineEvents); err != nil {
+			return nil, fmt.Errorf("unmarshaling timeline events: %w", err)
+		}
+
+		for _, te := range timelineEvents {
+			if te.Actor == nil {
+				continue
+			}
+
+			var event Event
+			switch te.Event {
+			case "assigned", "unassigned":
+				if te.Assignee == nil {
+					continue
+				}
+				event = Event{
+					Kind:      EventKind(te.Event),
+					Timestamp: te.CreatedAt,
+					Actor:     te.Actor.Login,
+					Bot:       isBot(te.Actor),
+					Targets:   []string{te.Assignee.Login},
+				}
+			case "review_requested", "review_request_removed":
+				if te.RequestedReviewer == nil {
+					continue
+				}
+				event = Event{
+					Kind:      EventKind(te.Event),
+					Timestamp: te.CreatedAt,
+					Actor:     te.Actor.Login,
+					Bot:       isBot(te.Actor),
+					Targets:   []string{te.RequestedReviewer.Login},
+				}
+			case "labeled", "unlabeled":
+				if te.Label.Name == "" {
+					continue
+				}
+				event = Event{
+					Kind:      EventKind(te.Event),
+					Timestamp: te.CreatedAt,
+					Actor:     te.Actor.Login,
+					Bot:       isBot(te.Actor),
+					Body:      te.Label.Name, // Store label name in Body field
+				}
+			case "mentioned":
+				event = Event{
+					Kind:      EventKind(te.Event),
+					Timestamp: te.CreatedAt,
+					Actor:     te.Actor.Login,
+					Bot:       isBot(te.Actor),
+				}
+			case "convert_to_draft", "ready_for_review":
+				event = Event{
+					Kind:      EventKind(te.Event),
+					Timestamp: te.CreatedAt,
+					Actor:     te.Actor.Login,
+					Bot:       isBot(te.Actor),
+				}
+			default:
+				continue
+			}
+
+			allEvents = append(allEvents, event)
+		}
+
+		if len(timelineEvents) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "timeline events")
+
+	return allEvents, nil
 }
 
 // cachedStatusChecks fetches status checks with caching.
 func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/statuses/%s", owner, repo, pr.Head.SHA)
-	result, err := c.cachedFetch(ctx, "statuses", endpoint, referenceTime, func() (interface{}, error) {
-		return c.statusChecks(ctx, owner, repo, pr)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/statuses/%s?page=%d&per_page=%d",
+			owner, repo, pr.Head.SHA, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "statuses", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var statuses []*githubStatus
+		if err := json.Unmarshal(rawData, &statuses); err != nil {
+			return nil, fmt.Errorf("unmarshaling statuses: %w", err)
+		}
+
+		for _, status := range statuses {
+			event := Event{
+				Kind:      StatusCheck,
+				Timestamp: status.CreatedAt,
+				Actor:     status.Creator.Login,
+				Bot:       isBot(status.Creator),
+				Body:      status.Context, // Store check name in Body
+				Outcome:   status.State,   // Store state in Outcome
+			}
+			// Include description if available
+			if status.Description != "" {
+				event.Body = event.Body + ": " + truncate(status.Description, 256)
+			}
+			allEvents = append(allEvents, event)
+		}
+
+		if len(statuses) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "status checks")
+
+	return allEvents, nil
 }
 
 // cachedCheckRuns fetches check runs with caching.
 func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time) ([]Event, error) {
-	endpoint := fmt.Sprintf("%s/%s/check-runs/%s", owner, repo, pr.Head.SHA)
-	result, err := c.cachedFetch(ctx, "check_runs", endpoint, referenceTime, func() (interface{}, error) {
-		return c.checkRuns(ctx, owner, repo, pr)
-	})
-	if err != nil {
-		return nil, err
+	var allEvents []Event
+	page := 1
+
+	for {
+		path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?page=%d&per_page=%d",
+			owner, repo, pr.Head.SHA, page, maxPerPage)
+		
+		rawData, err := c.cachedFetch(ctx, "check_runs", path, referenceTime)
+		if err != nil {
+			return nil, err
+		}
+
+		var response githubCheckRuns
+		if err := json.Unmarshal(rawData, &response); err != nil {
+			return nil, fmt.Errorf("unmarshaling check runs: %w", err)
+		}
+
+		for _, run := range response.CheckRuns {
+			event := Event{
+				Kind:      CheckRun,
+				Timestamp: run.CompletedAt,
+				Actor:     "github",
+				Bot:       true,
+				Body:      run.Name,       // Store check name in Body
+				Outcome:   run.Conclusion, // Store conclusion in Outcome
+			}
+			if run.CompletedAt.IsZero() {
+				event.Timestamp = run.StartedAt
+				event.Outcome = run.Status
+			}
+			allEvents = append(allEvents, event)
+		}
+
+		if len(response.CheckRuns) < maxPerPage {
+			break
+		}
+		page++
 	}
-	return unmarshalCachedEvents(result, "check runs")
+
+	return allEvents, nil
 }
 
-func (c *CacheClient) logCacheMiss(resourceType string, owner, repo string, prNumber int, cached bool, cachedAt, referenceTime time.Time) {
-	if cached {
-		c.logger.Debug("cache miss: "+resourceType+" expired",
-			"owner", owner,
-			"repo", repo,
-			"pr", prNumber,
-			"cached_at", cachedAt,
-			"reference_time", referenceTime)
-	} else {
-		c.logger.Debug("cache miss: "+resourceType+" not found",
-			"owner", owner,
-			"repo", repo,
-			"pr", prNumber)
-	}
-}
 
 func (c *CacheClient) cacheKey(parts ...string) string {
 	key := strings.Join(parts, "/")

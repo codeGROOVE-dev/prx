@@ -24,6 +24,9 @@ func TestCacheClient(t *testing.T) {
 		switch r.URL.Path {
 		case "/repos/test/repo/pulls/1":
 			pr := githubPullRequest{
+				Number:    1,
+				Title:     "Test PR",
+				Body:      "Test body",
 				CreatedAt: time.Now().Add(-24 * time.Hour),
 				UpdatedAt: time.Now().Add(-2 * time.Hour),
 				User:      &githubUser{Login: "testuser"},
