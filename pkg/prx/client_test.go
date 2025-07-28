@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 )
 
 // mockGithubClient implements githubAPIClient for testing
 type mockGithubClient struct {
+	mu        sync.Mutex
 	responses map[string]any
 	calls     []string
 }
 
 func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*githubResponse, error) {
+	m.mu.Lock()
 	m.calls = append(m.calls, path)
+	m.mu.Unlock()
 
 	if response, ok := m.responses[path]; ok {
 		data, _ := json.Marshal(response)
@@ -27,7 +31,9 @@ func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*github
 }
 
 func (m *mockGithubClient) getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
+	m.mu.Lock()
 	m.calls = append(m.calls, path)
+	m.mu.Unlock()
 
 	if response, ok := m.responses[path]; ok {
 		data, _ := json.Marshal(response)
@@ -36,6 +42,20 @@ func (m *mockGithubClient) getRaw(ctx context.Context, path string) (json.RawMes
 
 	// Return empty array for paginated endpoints
 	return json.RawMessage("[]"), &githubResponse{NextPage: 0}, nil
+}
+
+func (m *mockGithubClient) userPermission(ctx context.Context, owner, repo, username string) (string, error) {
+	path := "/repos/" + owner + "/" + repo + "/collaborators/" + username + "/permission"
+	m.calls = append(m.calls, path)
+	
+	if response, ok := m.responses[path]; ok {
+		if perm, ok := response.(string); ok {
+			return perm, nil
+		}
+	}
+	
+	// Default to read access
+	return "read", nil
 }
 
 func TestClientWithMock(t *testing.T) {
@@ -48,6 +68,7 @@ func TestClientWithMock(t *testing.T) {
 				CreatedAt: time.Now().Add(-24 * time.Hour),
 				UpdatedAt: time.Now().Add(-1 * time.Hour),
 				User:      &githubUser{Login: "testuser"},
+				AuthorAssociation: "CONTRIBUTOR",
 				State:     "open",
 				Head: struct {
 					SHA string `json:"sha"`
@@ -70,6 +91,9 @@ func TestClientWithMock(t *testing.T) {
 	client := &Client{
 		github: mock,
 		logger: slog.Default(),
+		permissionCache: &permissionCache{
+			memory: make(map[string]permissionEntry),
+		},
 	}
 
 	ctx := context.Background()
@@ -100,8 +124,14 @@ func TestClientWithMock(t *testing.T) {
 		"/repos/owner/repo/commits/abc123/check-runs?per_page=100",
 	}
 
-	if len(mock.calls) != len(expectedCalls) {
-		t.Errorf("Expected %d API calls, got %d", len(expectedCalls), len(mock.calls))
-		t.Logf("Actual calls: %v", mock.calls)
+	mock.mu.Lock()
+	actualCalls := len(mock.calls)
+	callsCopy := make([]string, len(mock.calls))
+	copy(callsCopy, mock.calls)
+	mock.mu.Unlock()
+	
+	if actualCalls != len(expectedCalls) {
+		t.Errorf("Expected %d API calls, got %d", len(expectedCalls), actualCalls)
+		t.Logf("Actual calls: %v", callsCopy)
 	}
 }

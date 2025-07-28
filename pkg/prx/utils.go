@@ -91,6 +91,7 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
+
 func calculateTestSummary(events []Event) *TestSummary {
 	summary := &TestSummary{}
 	checkStates := make(map[string]string)
@@ -142,6 +143,42 @@ func calculateStatusSummary(events []Event) *StatusSummary {
 	return summary
 }
 
+func calculateApprovalSummary(events []Event) *ApprovalSummary {
+	summary := &ApprovalSummary{}
+	
+	// Track the latest review state from each user
+	latestReviews := make(map[string]Event)
+	
+	for _, event := range events {
+		if event.Kind == Review && event.Outcome != "" {
+			latestReviews[event.Actor] = event
+		}
+	}
+	
+	// Check permissions for each reviewer and categorize their reviews
+	for _, review := range latestReviews {
+		switch review.Outcome {
+		case "approved":
+			// Use the WriteAccess field that was already populated in the event
+			if review.WriteAccess != nil {
+				if *review.WriteAccess == WriteAccessDefinitely {
+					summary.ApprovalsWithWriteAccess++
+				} else {
+					// WriteAccessUnlikely or WriteAccessLikely count as without confirmed write access
+					summary.ApprovalsWithoutWriteAccess++
+				}
+			} else {
+				// If write access info is missing, treat as without write access
+				summary.ApprovalsWithoutWriteAccess++
+			}
+		case "changes_requested":
+			summary.ChangesRequested++
+		}
+	}
+	
+	return summary
+}
+
 func filterEvents(events []Event) []Event {
 	filtered := make([]Event, 0, len(events))
 	
@@ -160,3 +197,4 @@ func filterEvents(events []Event) []Event {
 	
 	return filtered
 }
+

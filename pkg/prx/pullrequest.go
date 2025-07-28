@@ -6,57 +6,71 @@ import (
 
 // PullRequest represents a GitHub pull request with its essential metadata.
 type PullRequest struct {
-	Number         int    `json:"number"`
-	Title          string `json:"title"`
-	Body           string `json:"body"`
-	State          string `json:"state"`           // "open", "closed"
-	Draft          bool   `json:"draft"`           // Whether the PR is a draft
-	Merged         bool   `json:"merged"`          // Whether the PR was merged
-	Mergeable      *bool  `json:"mergeable"`       // Can be true, false, or null
-	MergeableState string `json:"mergeable_state"` // "clean", "dirty", "blocked", "unstable", "unknown"
-
+	// Basic Information
+	Number int    `json:"number"` // PR number (e.g., 1773)
+	Title  string `json:"title"`  // PR title
+	Body   string `json:"body"`   // PR description (truncated to 256 chars)
+	Author string `json:"author"` // GitHub username of the PR author
+	
+	// Status Information
+	State          string `json:"state"`           // Current state: "open" or "closed"
+	Draft          bool   `json:"draft"`           // True if this is a draft PR
+	Merged         bool   `json:"merged"`          // True if the PR was merged
+	MergedBy       string `json:"merged_by,omitempty"` // Username who merged the PR
+	Mergeable      *bool  `json:"mergeable"`       // GitHub's assessment: true, false, or null (still computing)
+	MergeableState string `json:"mergeable_state"` // Details: "clean", "dirty", "blocked", "unstable", "unknown"
+	
 	// Timestamps
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	ClosedAt  *time.Time `json:"closed_at,omitempty"`
-	MergedAt  *time.Time `json:"merged_at,omitempty"`
-
-	// Users
-	Author            string `json:"author"`
-	AuthorAssociation string `json:"author_association"` // OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc.
-	AuthorBot         bool   `json:"author_bot"`         // Whether the PR author is a bot
-	MergedBy          string `json:"merged_by,omitempty"`
-
-	// PR Size
-	Additions    int `json:"additions"`     // Lines added
-	Deletions    int `json:"deletions"`     // Lines removed
-	ChangedFiles int `json:"changed_files"` // Number of files changed
-
-	// Current State
-	Assignees          []string `json:"assignees,omitempty"`           // Current assignees
-	RequestedReviewers []string `json:"requested_reviewers,omitempty"` // Users with pending review requests
-	Labels             []string `json:"labels,omitempty"`              // Current labels
-
-	// Test Summary
-	TestSummary *TestSummary `json:"test_summary,omitempty"` // Summary of test results
-
-	// Status Summary
-	StatusSummary *StatusSummary `json:"status_summary,omitempty"` // Summary of all checks (status_check + check_run)
+	CreatedAt time.Time  `json:"created_at"`          // When the PR was created
+	UpdatedAt time.Time  `json:"updated_at"`          // Last activity on the PR
+	ClosedAt  *time.Time `json:"closed_at,omitempty"` // When the PR was closed (nil if still open)
+	MergedAt  *time.Time `json:"merged_at,omitempty"` // When the PR was merged (nil if not merged)
+	
+	// Code Changes
+	Additions    int `json:"additions"`     // Total lines added
+	Deletions    int `json:"deletions"`     // Total lines removed
+	ChangedFiles int `json:"changed_files"` // Number of files modified
+	
+	// People & Permissions
+	AuthorBot            bool     `json:"author_bot"`             // True if author is a bot account
+	AuthorHasWriteAccess bool     `json:"author_has_write_access"` // True if author can merge
+	Assignees            []string `json:"assignees,omitempty"`    // Current assignees
+	RequestedReviewers   []string `json:"requested_reviewers,omitempty"` // Pending review requests
+	
+	// Organization
+	Labels []string `json:"labels,omitempty"` // Applied labels
+	
+	// Aggregated Summaries (computed from events)
+	TestSummary     *TestSummary     `json:"test_summary,omitempty"`     // Test results summary
+	StatusSummary   *StatusSummary   `json:"status_summary,omitempty"`   // All checks summary
+	ApprovalSummary *ApprovalSummary `json:"approval_summary,omitempty"` // Review approvals summary
 }
 
-// TestSummary contains aggregate test result counts
+// TestSummary aggregates test results from check runs
 type TestSummary struct {
-	Passing int `json:"passing"` // Number of passing tests
-	Failing int `json:"failing"` // Number of failing tests
-	Pending int `json:"pending"` // Number of pending tests
+	Passing int `json:"passing"` // Tests that completed successfully
+	Failing int `json:"failing"` // Tests that failed or timed out
+	Pending int `json:"pending"` // Tests that are still running or queued
 }
 
-// StatusSummary contains aggregate status check and check run counts
+// StatusSummary aggregates all status checks and check runs
 type StatusSummary struct {
-	Success int `json:"success"` // Number of successful checks
-	Failure int `json:"failure"` // Number of failed checks
-	Pending int `json:"pending"` // Number of pending checks
-	Neutral int `json:"neutral"` // Number of neutral checks (skipped, cancelled, etc.)
+	Success int `json:"success"` // Checks that completed successfully
+	Failure int `json:"failure"` // Checks that failed, errored, or require action
+	Pending int `json:"pending"` // Checks that are queued or in progress
+	Neutral int `json:"neutral"` // Checks that were cancelled, skipped, or neutral
+}
+
+// ApprovalSummary tracks PR review approvals and change requests
+type ApprovalSummary struct {
+	// Approvals from users confirmed to have write access (owners, collaborators, members with confirmed access)
+	ApprovalsWithWriteAccess int `json:"approvals_with_write_access"`
+	
+	// Approvals from users without confirmed write access (contributors, unconfirmed members, etc.)
+	ApprovalsWithoutWriteAccess int `json:"approvals_without_write_access"`
+	
+	// Outstanding change requests from any reviewer
+	ChangesRequested int `json:"changes_requested"`
 }
 
 // PullRequestData contains a pull request and all its associated events.

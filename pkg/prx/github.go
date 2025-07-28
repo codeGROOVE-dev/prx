@@ -19,10 +19,23 @@ const (
 	maxResponseSize = 10 * 1024 * 1024 // 10MB
 )
 
+// GitHubAPIError represents an error response from the GitHub API.
+type GitHubAPIError struct {
+	StatusCode int
+	Status     string
+	Body       string
+	URL        string
+}
+
+func (e *GitHubAPIError) Error() string {
+	return fmt.Sprintf("github API error: %s", e.Status)
+}
+
 // githubAPIClient defines the interface for GitHub API operations.
 type githubAPIClient interface {
 	get(ctx context.Context, path string, v any) (*githubResponse, error)
 	getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error)
+	userPermission(ctx context.Context, owner, repo, username string) (string, error)
 }
 
 // githubClient is a client for interacting with the GitHub API.
@@ -38,112 +51,102 @@ func newGithubClient(client *http.Client, token string) *githubClient {
 	return &githubClient{client: client, token: token, api: githubAPI}
 }
 
-// get makes a GET request to the GitHub API and decodes the response into v.
-func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResponse, error) {
+// doRequest performs the common HTTP request logic for GitHub API calls
+func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *githubResponse, error) {
 	apiURL := c.api + path
-	slog.Debug("API request", "method", "GET", "url", apiURL)
+	slog.Info("GitHub API request starting", "method", "GET", "url", apiURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
+	start := time.Now()
 	resp, err := c.client.Do(req)
+	elapsed := time.Since(start)
 	if err != nil {
-		return nil, err
+		slog.Error("GitHub API request failed", "url", apiURL, "error", err, "elapsed", elapsed)
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	slog.Debug("API response", "status", resp.Status, "url", apiURL)
+	slog.Info("GitHub API response received", "status", resp.Status, "url", apiURL, "elapsed", elapsed)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		slog.Error("GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
-		return nil, fmt.Errorf("github API error: %s", resp.Status)
+		return nil, nil, &GitHubAPIError{
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+			Body:       string(body),
+			URL:        apiURL,
+		}
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	// Parse Link header for pagination
+	nextPageNum := 0
+	linkHeader := resp.Header.Get("Link")
+	links := strings.Split(linkHeader, ",")
+	for _, link := range links {
+		parts := strings.Split(strings.TrimSpace(link), ";")
+		if len(parts) == 2 && strings.TrimSpace(parts[1]) == `rel="next"` {
+			u, err := url.Parse(strings.Trim(parts[0], "<>"))
+			if err == nil {
+				page := u.Query().Get("page")
+				nextPageNum, _ = strconv.Atoi(page)
+			}
+			break
+		}
+	}
+
+	return data, &githubResponse{NextPage: nextPageNum}, nil
+}
+
+// get makes a GET request to the GitHub API and decodes the response into v.
+func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResponse, error) {
+	data, resp, err := c.doRequest(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	
 	if err := json.Unmarshal(data, v); err != nil {
 		return nil, err
 	}
 	
-
-	nextPageNum := 0
-	linkHeader := resp.Header.Get("Link")
-	links := strings.Split(linkHeader, ",")
-	for _, link := range links {
-		parts := strings.Split(strings.TrimSpace(link), ";")
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) == `rel="next"` {
-			u, err := url.Parse(strings.Trim(parts[0], "<>"))
-			if err == nil {
-				page := u.Query().Get("page")
-				nextPageNum, _ = strconv.Atoi(page)
-			}
-			break
-		}
-	}
-
-	return &githubResponse{
-		NextPage: nextPageNum,
-	}, nil
+	return resp, nil
 }
 
 // getRaw makes a GET request to the GitHub API and returns the raw JSON response.
 func (c *githubClient) getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
-	apiURL := c.api + path
-	slog.Debug("API request", "method", "GET", "url", apiURL)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	data, resp, err := c.doRequest(ctx, path)
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	return json.RawMessage(data), resp, nil
+}
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, nil, err
+// userPermission gets the permission level for a user on a repository.
+// Returns "admin", "write", "read", or "none".
+func (c *githubClient) userPermission(ctx context.Context, owner, repo, username string) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/collaborators/%s/permission", owner, repo, username)
+	
+	var permResp struct {
+		Permission string `json:"permission"`
 	}
-	defer resp.Body.Close()
-
-	slog.Debug("API response", "status", resp.Status, "url", apiURL)
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		slog.Error("GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
-		return nil, nil, fmt.Errorf("github API error: %s", resp.Status)
+	
+	if _, err := c.get(ctx, path, &permResp); err != nil {
+		// Return the error so caller can handle it appropriately
+		return "", err
 	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
-	if err != nil {
-		return nil, nil, err
-	}
-
-
-	nextPageNum := 0
-	linkHeader := resp.Header.Get("Link")
-	links := strings.Split(linkHeader, ",")
-	for _, link := range links {
-		parts := strings.Split(strings.TrimSpace(link), ";")
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) == `rel="next"` {
-			u, err := url.Parse(strings.Trim(parts[0], "<>"))
-			if err == nil {
-				page := u.Query().Get("page")
-				nextPageNum, _ = strconv.Atoi(page)
-			}
-			break
-		}
-	}
-
-	return json.RawMessage(data), &githubResponse{
-		NextPage: nextPageNum,
-	}, nil
+	
+	return permResp.Permission, nil
 }
 
 // githubResponse wraps a GitHub API response.

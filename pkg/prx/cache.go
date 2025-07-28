@@ -42,6 +42,13 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 
 	client := NewClient(token, opts...)
 
+	// Initialize permission cache with disk persistence for CacheClient
+	permCache, err := newPermissionCache(cleanPath)
+	if err != nil {
+		return nil, fmt.Errorf("creating permission cache: %w", err)
+	}
+	client.permissionCache = permCache
+
 	cc := &CacheClient{
 		Client:   client,
 		cacheDir: cleanPath,
@@ -81,11 +88,19 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		CreatedAt:         pr.CreatedAt,
 		UpdatedAt:         pr.UpdatedAt,
 		Author:            pr.User.Login,
-		AuthorAssociation: pr.AuthorAssociation,
 		AuthorBot:         isBot(pr.User),
 		Additions:         pr.Additions,
 		Deletions:         pr.Deletions,
 		ChangedFiles:      pr.ChangedFiles,
+	}
+	
+	// Check if PR author has write access
+	if pr.User != nil {
+		writeAccess := c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
+		if writeAccess != nil {
+			// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
+			pullRequest.AuthorHasWriteAccess = (*writeAccess != WriteAccessUnlikely)
+		}
 	}
 
 	if !pr.ClosedAt.IsZero() {
@@ -98,12 +113,14 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		pullRequest.MergedBy = pr.MergedBy.Login
 	}
 
-	events = append(events, Event{
-		Kind:      PROpened,
-		Timestamp: pr.CreatedAt,
-		Actor:     pr.User.Login,
-		Bot:       isBot(pr.User),
-	})
+	prOpenedEvent := Event{
+		Kind:        PROpened,
+		Timestamp:   pr.CreatedAt,
+		Actor:       pr.User.Login,
+		Bot:         isBot(pr.User),
+		WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+	}
+	events = append(events, prOpenedEvent)
 
 	prUpdatedAt := pr.UpdatedAt
 
@@ -184,12 +201,14 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 			Bot:       isBot(pr.MergedBy),
 		})
 	} else if pr.State == "closed" {
-		events = append(events, Event{
-			Kind:      PRClosed,
-			Timestamp: pr.ClosedAt,
-			Actor:     pr.User.Login,
-			Bot:       isBot(pr.User),
-		})
+		closedEvent := Event{
+			Kind:        PRClosed,
+			Timestamp:   pr.ClosedAt,
+			Actor:       pr.User.Login,
+			Bot:         isBot(pr.User),
+			WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+		}
+		events = append(events, closedEvent)
 	}
 
 	// Filter events to exclude non-failure status_check events
@@ -222,6 +241,11 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 			if err := json.Unmarshal(cached.Data, &pr); err != nil {
 				c.logger.Warn("failed to unmarshal cached pull request", "error", err)
 			} else {
+				c.logger.Info("cache hit: pull request",
+					"owner", owner,
+					"repo", repo,
+					"pr", prNumber,
+					"cached_at", cached.CachedAt)
 				return &pr, nil
 			}
 		}
@@ -231,9 +255,18 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 			"pr", prNumber,
 			"cached_at", cached.CachedAt,
 			"reference_time", referenceTime)
+	} else {
+		c.logger.Info("cache miss: pull request not in cache",
+			"owner", owner,
+			"repo", repo,
+			"pr", prNumber)
 	}
 
 	// Fetch from API
+	c.logger.Info("fetching pull request from GitHub API",
+		"owner", owner,
+		"repo", repo,
+		"pr", prNumber)
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
 	rawData, _, err := c.github.getRaw(ctx, path)
 	if err != nil {
@@ -264,15 +297,16 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 	var cached cacheEntry
 	if c.loadCache(cacheKey, &cached) {
 		if cached.UpdatedAt.After(referenceTime) || cached.UpdatedAt.Equal(referenceTime) {
-			c.logger.Debug("cache hit", "type", dataType, "path", path, "cached_at", cached.CachedAt)
+			c.logger.Info("cache hit", "type", dataType, "path", path, "cached_at", cached.CachedAt)
 			return cached.Data, nil
 		}
-		c.logger.Debug("cache miss: "+dataType+" expired", "cached_at", cached.UpdatedAt, "reference_time", referenceTime)
+		c.logger.Info("cache miss: "+dataType+" expired", "cached_at", cached.UpdatedAt, "reference_time", referenceTime)
 	} else {
-		c.logger.Debug("cache miss: "+dataType+" not found")
+		c.logger.Info("cache miss: "+dataType+" not found", "type", dataType, "path", path)
 	}
 
 	// Fetch from API
+	c.logger.Info("fetching from GitHub API", "type", dataType, "path", path)
 	rawData, _, err := c.github.getRaw(ctx, path)
 	if err != nil {
 		return nil, err
@@ -358,7 +392,9 @@ func (c *CacheClient) cachedComments(ctx context.Context, owner, repo string, pr
 		}
 
 		for _, comment := range comments {
-			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body, comment.AuthorAssociation)
+			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body)
+			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
+			
 			allEvents = append(allEvents, event)
 		}
 
@@ -392,8 +428,15 @@ func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prN
 
 		for _, review := range reviews {
 			if review.State != "" {
-				event := createEvent(Review, review.SubmittedAt, review.User, review.Body, review.AuthorAssociation)
+				c.logger.Info("processing review",
+					"reviewer", review.User.Login,
+					"author_association", review.AuthorAssociation,
+					"state", review.State)
+				
+				event := createEvent(Review, review.SubmittedAt, review.User, review.Body)
 				event.Outcome = review.State // "approved", "changes_requested", "commented"
+				event.WriteAccess = c.getWriteAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
+				
 				allEvents = append(allEvents, event)
 			}
 		}
@@ -427,7 +470,9 @@ func (c *CacheClient) cachedReviewComments(ctx context.Context, owner, repo stri
 		}
 
 		for _, comment := range comments {
-			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body, comment.AuthorAssociation)
+			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body)
+			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
+			
 			allEvents = append(allEvents, event)
 		}
 

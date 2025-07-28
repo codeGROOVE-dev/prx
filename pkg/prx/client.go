@@ -5,6 +5,7 @@ package prx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,9 +18,10 @@ import (
 
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
-	github githubAPIClient
-	logger *slog.Logger
-	token  string // Store token for recreating client with new transport
+	github          githubAPIClient
+	logger          *slog.Logger
+	token           string // Store token for recreating client with new transport
+	permissionCache *permissionCache
 }
 
 // isBot returns true if the user appears to be a bot.
@@ -31,6 +33,35 @@ func isBot(user *githubUser) bool {
 		strings.HasSuffix(user.Login, "-bot") ||
 		strings.HasSuffix(user.Login, "[bot]") ||
 		strings.HasSuffix(user.Login, "-robot")
+}
+
+// getWriteAccess returns the write access level for a user
+func (c *Client) getWriteAccess(ctx context.Context, owner, repo string, user *githubUser, association string) *int {
+	if user == nil {
+		return nil
+	}
+	
+	// Check association-based access
+	switch association {
+	case "OWNER", "COLLABORATOR":
+		access := WriteAccessDefinitely
+		return &access
+	case "MEMBER":
+		// Need to check via API
+		perm, _ := c.userPermissionCached(ctx, owner, repo, user.Login, association)
+		if perm == "uncertain" {
+			access := WriteAccessLikely
+			return &access
+		}
+		if perm == "admin" || perm == "write" {
+			access := WriteAccessDefinitely
+			return &access
+		}
+	}
+	
+	// Default: no write access
+	access := WriteAccessUnlikely
+	return &access
 }
 
 // Option is a function that configures a Client.
@@ -76,11 +107,63 @@ func NewClient(token string, opts ...Option) *Client {
 		}, token),
 	}
 
+	// Initialize in-memory permission cache (no disk persistence for regular client)
+	c.permissionCache = &permissionCache{
+		memory: make(map[string]permissionEntry),
+		// diskPath is empty, so it won't persist to disk
+	}
+
 	for _, opt := range opts {
 		opt(c)
 	}
 
 	return c
+}
+
+// userPermissionCached checks user permissions with caching.
+func (c *Client) userPermissionCached(ctx context.Context, owner, repo, username, authorAssociation string) (string, error) {
+	// Check cache first
+	if perm, found := c.permissionCache.get(owner, repo, username); found {
+		c.logger.Info("permission cache hit", "owner", owner, "repo", repo, "user", username, "permission", perm)
+		return perm, nil
+	}
+	
+	// Not in cache, fetch from API
+	c.logger.Info("permission cache miss - checking user permissions via API", 
+		"owner", owner, 
+		"repo", repo, 
+		"user", username,
+		"author_association", authorAssociation,
+		"reason", "not in cache")
+	
+	perm, err := c.github.userPermission(ctx, owner, repo, username)
+	if err != nil {
+		// Check if this is a 403 error (no permission to check)
+		var apiErr *GitHubAPIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+			c.logger.Info("permission check failed with 403, assuming write access for MEMBER", 
+				"owner", owner, 
+				"repo", repo, 
+				"user", username,
+				"author_association", authorAssociation,
+				"error", apiErr.Body)
+			// For MEMBER association with 403 error, we can't determine permissions
+			// Return "uncertain" to indicate we don't know
+			if cacheErr := c.permissionCache.set(owner, repo, username, "uncertain"); cacheErr != nil {
+				c.logger.Warn("failed to cache permission", "error", cacheErr)
+			}
+			return "uncertain", nil // Can't determine access for MEMBER when API returns 403
+		}
+		return perm, err
+	}
+	
+	// Cache the result
+	if err := c.permissionCache.set(owner, repo, username, perm); err != nil {
+		// Log error but don't fail the request
+		c.logger.Warn("failed to cache permission", "error", err)
+	}
+	
+	return perm, nil
 }
 
 // PullRequest fetches a pull request with all its events and metadata.
@@ -122,11 +205,19 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		CreatedAt:         pr.CreatedAt,
 		UpdatedAt:         pr.UpdatedAt,
 		Author:            pr.User.Login,
-		AuthorAssociation: pr.AuthorAssociation,
 		AuthorBot:         isBot(pr.User),
 		Additions:         pr.Additions,
 		Deletions:         pr.Deletions,
 		ChangedFiles:      pr.ChangedFiles,
+	}
+	
+	// Check if PR author has write access
+	if pr.User != nil {
+		writeAccess := c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
+		if writeAccess != nil {
+			// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
+			pullRequest.AuthorHasWriteAccess = (*writeAccess != WriteAccessUnlikely)
+		}
 	}
 
 	if !pr.ClosedAt.IsZero() {
@@ -157,96 +248,47 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		}
 	}
 
-	events = append(events, Event{
-		Kind:      PROpened,
-		Timestamp: pr.CreatedAt,
-		Actor:     pr.User.Login,
-		Bot:       isBot(pr.User),
-	})
+	prOpenedEvent := Event{
+		Kind:        PROpened,
+		Timestamp:   pr.CreatedAt,
+		Actor:       pr.User.Login,
+		Bot:         isBot(pr.User),
+		WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+	}
+	events = append(events, prOpenedEvent)
 
 	g, gctx := errgroup.WithContext(ctx)
 	var mu sync.Mutex
 	var errors []error
 
-	// Fetch commits
-	g.Go(func() error {
-		e, err := c.commits(gctx, owner, repo, prNumber)
-		if err != nil {
-			c.logger.Error("failed to fetch commits", "error", err)
+	// Helper to run fetch functions in parallel
+	fetch := func(name string, fn func(context.Context, string, string, int) ([]Event, error)) {
+		g.Go(func() error {
+			e, err := fn(gctx, owner, repo, prNumber)
+			if err != nil {
+				c.logger.Error("failed to fetch "+name, "error", err)
+				mu.Lock()
+				errors = append(errors, err)
+				mu.Unlock()
+				return nil
+			}
 			mu.Lock()
-			errors = append(errors, err)
+			events = append(events, e...)
 			mu.Unlock()
 			return nil
-		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
+		})
+	}
 
-	// Fetch comments
-	g.Go(func() error {
-		e, err := c.comments(gctx, owner, repo, prNumber)
-		if err != nil {
-			c.logger.Error("failed to fetch comments", "error", err)
-			mu.Lock()
-			errors = append(errors, err)
-			mu.Unlock()
-			return nil
-		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
+	// Fetch all data in parallel
+	fetch("commits", c.commits)
 
-	// Fetch reviews
-	g.Go(func() error {
-		e, err := c.reviews(gctx, owner, repo, prNumber)
-		if err != nil {
-			c.logger.Error("failed to fetch reviews", "error", err)
-			mu.Lock()
-			errors = append(errors, err)
-			mu.Unlock()
-			return nil
-		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
+	fetch("comments", c.comments)
 
-	// Fetch review comments
-	g.Go(func() error {
-		e, err := c.reviewComments(gctx, owner, repo, prNumber)
-		if err != nil {
-			c.logger.Error("failed to fetch review comments", "error", err)
-			mu.Lock()
-			errors = append(errors, err)
-			mu.Unlock()
-			return nil
-		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
+	fetch("reviews", c.reviews)
 
-	// Fetch timeline events
-	g.Go(func() error {
-		e, err := c.timelineEvents(gctx, owner, repo, prNumber)
-		if err != nil {
-			c.logger.Error("failed to fetch timeline events", "error", err)
-			mu.Lock()
-			errors = append(errors, err)
-			mu.Unlock()
-			return nil
-		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
+	fetch("review comments", c.reviewComments)
+
+	fetch("timeline events", c.timelineEvents)
 
 	// Fetch status checks
 	g.Go(func() error {
@@ -296,12 +338,14 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 			Bot:       isBot(pr.MergedBy),
 		})
 	} else if pr.State == "closed" {
-		events = append(events, Event{
-			Kind:      PRClosed,
-			Timestamp: pr.ClosedAt,
-			Actor:     pr.User.Login,
-			Bot:       isBot(pr.User),
-		})
+		closedEvent := Event{
+			Kind:        PRClosed,
+			Timestamp:   pr.ClosedAt,
+			Actor:       pr.User.Login,
+			Bot:         isBot(pr.User),
+			WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+		}
+		events = append(events, closedEvent)
 	}
 
 	// Filter events to exclude non-failure status_check events
@@ -317,6 +361,11 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 	statusSummary := calculateStatusSummary(events)
 	if statusSummary.Success > 0 || statusSummary.Failure > 0 || statusSummary.Pending > 0 || statusSummary.Neutral > 0 {
 		pullRequest.StatusSummary = statusSummary
+	}
+
+	approvalSummary := calculateApprovalSummary(events)
+	if approvalSummary.ApprovalsWithWriteAccess > 0 || approvalSummary.ApprovalsWithoutWriteAccess > 0 || approvalSummary.ChangesRequested > 0 {
+		pullRequest.ApprovalSummary = approvalSummary
 	}
 
 	c.logger.Info("successfully fetched pull request",

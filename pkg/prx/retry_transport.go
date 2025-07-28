@@ -33,6 +33,12 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Base == nil {
 		t.Base = http.DefaultTransport
 	}
+	
+	// Log the outgoing request
+	slog.Info("HTTP request starting",
+		"method", req.Method,
+		"url", req.URL.String(),
+		"host", req.URL.Host)
 
 	var bodyBytes []byte
 	if req.Body != nil {
@@ -55,17 +61,31 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 
 			var err error
+			start := time.Now()
 			resp, err = t.Base.RoundTrip(req)
+			elapsed := time.Since(start)
 			if err != nil {
+				slog.Error("HTTP request failed",
+					"url", req.URL.String(),
+					"error", err,
+					"elapsed", elapsed)
 				lastErr = err
 				return err
 			}
+			
+			slog.Info("HTTP response received",
+				"status", resp.StatusCode,
+				"url", req.URL.String(),
+				"elapsed", elapsed)
 
 			if shouldRetry(resp.StatusCode) {
 				bodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				slog.Debug("Retrying request", "status", resp.StatusCode, "url", req.URL.String())
+				slog.Info("HTTP request will be retried",
+					"status", resp.StatusCode,
+					"url", req.URL.String(),
+					"reason", "retryable status code")
 				lastErr = &retryableError{StatusCode: resp.StatusCode}
 				return lastErr
 			}

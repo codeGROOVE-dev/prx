@@ -8,17 +8,17 @@ import (
 
 const maxPerPage = 100
 
-func createEvent(kind EventKind, timestamp time.Time, user *githubUser, body, authorAssoc string) Event {
+// createEvent creates an event with basic information
+func createEvent(kind EventKind, timestamp time.Time, user *githubUser, body string) Event {
 	body = truncate(body, 256)
 	return Event{
-		Kind:              kind,
-		Timestamp:         timestamp,
-		Actor:             user.Login,
-		Body:              body,
-		Question:          containsQuestion(body),
-		AuthorAssociation: authorAssoc,
-		Bot:               isBot(user),
-		Targets:           extractMentions(body),
+		Kind:      kind,
+		Timestamp: timestamp,
+		Actor:     user.Login,
+		Body:      body,
+		Question:  containsQuestion(body),
+		Bot:       isBot(user),
+		Targets:   extractMentions(body),
 	}
 }
 
@@ -81,7 +81,8 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 		}
 
 		for _, comment := range comments {
-			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body, comment.AuthorAssociation)
+			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body)
+			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
 			events = append(events, event)
 		}
 
@@ -111,8 +112,9 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 
 		for _, review := range reviews {
 			if review.State != "" {
-				event := createEvent(Review, review.SubmittedAt, review.User, review.Body, review.AuthorAssociation)
+				event := createEvent(Review, review.SubmittedAt, review.User, review.Body)
 				event.Outcome = review.State // "approved", "changes_requested", "commented"
+				event.WriteAccess = c.getWriteAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
 				events = append(events, event)
 			}
 		}
@@ -142,7 +144,8 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 		}
 
 		for _, comment := range comments {
-			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body, comment.AuthorAssociation)
+			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body)
+			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
 			events = append(events, event)
 		}
 
