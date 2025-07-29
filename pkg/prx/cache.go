@@ -29,22 +29,6 @@ type cacheEntry struct {
 	CachedAt  time.Time       `json:"cached_at"`
 }
 
-// createEvent is a helper function to create an Event with common fields
-func createEvent(kind string, timestamp time.Time, user *githubUser, body string) Event {
-	body = truncate(body, 256)
-	event := Event{
-		Kind:      kind,
-		Timestamp: timestamp,
-		Body:      body,
-		Question:  containsQuestion(body),
-	}
-	if user != nil {
-		event.Actor = user.Login
-		event.Bot = isBot(user)
-	}
-	return event
-}
-
 // NewCacheClient creates a new caching client with the given cache directory.
 func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
 	cleanPath := filepath.Clean(cacheDir)
@@ -70,6 +54,7 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 		cacheDir: cleanPath,
 	}
 
+	// Schedule cleanup in background
 	go cc.cleanOldCaches()
 
 	return cc, nil
@@ -137,67 +122,59 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 
 	var errors []error
 
-	// Commits
-	commits, err := c.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch commits", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, commits...)
+	// Fetch all event types in parallel
+	type result struct {
+		events []Event
+		err    error
+		name   string
 	}
-
-	// Comments
-	comments, err := c.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch comments", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, comments...)
-	}
-
-	// Reviews
-	reviews, err := c.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch reviews", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, reviews...)
-	}
-
-	// Review comments
-	reviewComments, err := c.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch review comments", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, reviewComments...)
-	}
-
-	// Timeline events
-	timelineEvents, err := c.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch timeline events", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, timelineEvents...)
-	}
-
-	// Status checks
-	statusChecks, err := c.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch status checks", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, statusChecks...)
-	}
-
-	// Check runs
-	checkRuns, err := c.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt)
-	if err != nil {
-		c.logger.Error("failed to fetch check runs", "error", err)
-		errors = append(errors, err)
-	} else {
-		events = append(events, checkRuns...)
+	
+	results := make(chan result, 7)
+	
+	go func() {
+		e, err := c.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- result{e, err, "commits"}
+	}()
+	
+	go func() {
+		e, err := c.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- result{e, err, "comments"}
+	}()
+	
+	go func() {
+		e, err := c.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- result{e, err, "reviews"}
+	}()
+	
+	go func() {
+		e, err := c.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- result{e, err, "review comments"}
+	}()
+	
+	go func() {
+		e, err := c.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- result{e, err, "timeline events"}
+	}()
+	
+	go func() {
+		e, err := c.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt)
+		results <- result{e, err, "status checks"}
+	}()
+	
+	go func() {
+		e, err := c.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt)
+		results <- result{e, err, "check runs"}
+	}()
+	
+	// Collect results
+	for i := 0; i < 7; i++ {
+		r := <-results
+		if r.err != nil {
+			c.logger.Error("failed to fetch "+r.name, "error", r.err)
+			errors = append(errors, r.err)
+		} else {
+			events = append(events, r.events...)
+		}
 	}
 
 	if len(events) == 0 && len(errors) > 0 {
@@ -205,12 +182,17 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	}
 
 	if pr.Merged {
-		events = append(events, Event{
+		mergedEvent := Event{
 			Kind:      "pr_merged",
 			Timestamp: pr.MergedAt,
-			Actor:     pr.MergedBy.Login,
-			Bot:       isBot(pr.MergedBy),
-		})
+		}
+		if pr.MergedBy != nil {
+			mergedEvent.Actor = pr.MergedBy.Login
+			mergedEvent.Bot = isBot(pr.MergedBy)
+		} else {
+			mergedEvent.Actor = "unknown"
+		}
+		events = append(events, mergedEvent)
 	} else if pr.State == "closed" {
 		closedEvent := Event{
 			Kind:        "pr_closed",
@@ -518,14 +500,10 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 		}
 
 		for _, te := range timelineEvents {
-			if te.Actor == nil {
-				continue
-			}
-
 			var event Event
 			switch te.Event {
 			case "assigned", "unassigned":
-				if te.Assignee == nil {
+				if te.Actor == nil || te.Assignee == nil {
 					continue
 				}
 				event = Event{
@@ -537,19 +515,31 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 					TargetIsBot: isBot(te.Assignee),
 				}
 			case "review_requested", "review_request_removed":
-				if te.RequestedReviewer == nil {
+				if te.Actor == nil {
 					continue
 				}
-				event = Event{
-					Kind:        te.Event,
-					Timestamp:   te.CreatedAt,
-					Actor:       te.Actor.Login,
-					Bot:         isBot(te.Actor),
-					Target:      te.RequestedReviewer.Login,
-					TargetIsBot: isBot(te.RequestedReviewer),
+				if te.RequestedReviewer != nil {
+					event = Event{
+						Kind:        te.Event,
+						Timestamp:   te.CreatedAt,
+						Actor:       te.Actor.Login,
+						Bot:         isBot(te.Actor),
+						Target:      te.RequestedReviewer.Login,
+						TargetIsBot: isBot(te.RequestedReviewer),
+					}
+				} else if te.RequestedTeam.Name != "" {
+					event = Event{
+						Kind:      te.Event,
+						Timestamp: te.CreatedAt,
+						Actor:     te.Actor.Login,
+						Bot:       isBot(te.Actor),
+						Target:    te.RequestedTeam.Name,
+					}
+				} else {
+					continue
 				}
 			case "labeled", "unlabeled":
-				if te.Label.Name == "" {
+				if te.Actor == nil || te.Label.Name == "" {
 					continue
 				}
 				event = Event{
@@ -560,6 +550,9 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 					Body:      te.Label.Name, // Store label name in Body field
 				}
 			case "mentioned":
+				if te.Actor == nil {
+					continue
+				}
 				event = Event{
 					Kind:      te.Event,
 					Timestamp: te.CreatedAt,
@@ -567,6 +560,9 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 					Bot:       isBot(te.Actor),
 				}
 			case "convert_to_draft", "ready_for_review":
+				if te.Actor == nil {
+					continue
+				}
 				event = Event{
 					Kind:      te.Event,
 					Timestamp: te.CreatedAt,
@@ -704,10 +700,6 @@ func (c *CacheClient) loadCache(key string, v any) bool {
 }
 
 func (c *CacheClient) saveCache(key string, v any) error {
-	if len(key) != 64 || !isHexString(key) {
-		return fmt.Errorf("invalid cache key format")
-	}
-
 	path := filepath.Join(c.cacheDir, key+".json")
 
 	tmpPath := path + ".tmp"

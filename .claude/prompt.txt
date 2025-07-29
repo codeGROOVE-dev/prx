@@ -11,7 +11,7 @@
 - Code should adhere to advice on https://go.dev/doc/effective_go
 - Code should be as simple as possible without impacting security, reliability, or scalability
 - Look for performance tweaks that can be made without adding unnecessary complexity
-- All external API calls should have exponential back-off with jitter (avast/retry is a good library for this in Go)
+- All external API calls should have exponential back-off with jitter
 - Code should not be overengineered with unnecessary abstractions
 - Code should be something that Rob Pike could be proud of.
 - The app/service should degrade gracefully when a dependent API call fails

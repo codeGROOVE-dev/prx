@@ -158,3 +158,19 @@ type Event struct {
 	// - WriteAccessDefinitely (2): User definitely has write access
 	WriteAccess int `json:"write_access,omitempty"`
 }
+
+// createEvent is a helper function to create an Event with common fields
+func createEvent(kind string, timestamp time.Time, user *githubUser, body string) Event {
+	body = truncate(body, 256)
+	event := Event{
+		Kind:      kind,
+		Timestamp: timestamp,
+		Body:      body,
+		Question:  containsQuestion(body),
+	}
+	if user != nil {
+		event.Actor = user.Login
+		event.Bot = isBot(user)
+	}
+	return event
+}

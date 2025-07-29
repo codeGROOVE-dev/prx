@@ -11,10 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 )
 
 // Client provides methods to fetch GitHub pull request events.
@@ -256,86 +253,86 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 	}
 	events = append(events, prOpenedEvent)
 
-	g, gctx := errgroup.WithContext(ctx)
-	var mu sync.Mutex
+	// Fetch all event types in parallel
+	type result struct {
+		events []Event
+		err    error
+		name   string
+	}
+	
+	results := make(chan result, 7)
+	
+	go func() {
+		e, err := c.commits(ctx, owner, repo, prNumber)
+		results <- result{e, err, "commits"}
+	}()
+	
+	go func() {
+		e, err := c.comments(ctx, owner, repo, prNumber)
+		results <- result{e, err, "comments"}
+	}()
+	
+	go func() {
+		e, err := c.reviews(ctx, owner, repo, prNumber)
+		results <- result{e, err, "reviews"}
+	}()
+	
+	go func() {
+		e, err := c.reviewComments(ctx, owner, repo, prNumber)
+		results <- result{e, err, "review comments"}
+	}()
+	
+	go func() {
+		e, err := c.timelineEvents(ctx, owner, repo, prNumber)
+		results <- result{e, err, "timeline events"}
+	}()
+	
+	go func() {
+		e, err := c.statusChecks(ctx, owner, repo, &pr)
+		results <- result{e, err, "status checks"}
+	}()
+	
+	go func() {
+		e, err := c.checkRuns(ctx, owner, repo, &pr)
+		results <- result{e, err, "check runs"}
+	}()
+	
+	// Collect results
 	var errors []error
-
-	// Helper to run fetch functions in parallel
-	fetch := func(name string, fn func(context.Context, string, string, int) ([]Event, error)) {
-		g.Go(func() error {
-			e, err := fn(gctx, owner, repo, prNumber)
-			if err != nil {
-				c.logger.Error("failed to fetch "+name, "error", err)
-				mu.Lock()
-				errors = append(errors, err)
-				mu.Unlock()
-				return nil
-			}
-			mu.Lock()
-			events = append(events, e...)
-			mu.Unlock()
-			return nil
-		})
-	}
-
-	// Fetch all data in parallel
-	fetch("commits", c.commits)
-
-	fetch("comments", c.comments)
-
-	fetch("reviews", c.reviews)
-
-	fetch("review comments", c.reviewComments)
-
-	fetch("timeline events", c.timelineEvents)
-
-	// Fetch status checks
-	g.Go(func() error {
-		e, err := c.statusChecks(gctx, owner, repo, &pr)
-		if err != nil {
-			c.logger.Error("failed to fetch status checks", "error", err)
-			mu.Lock()
-			errors = append(errors, err)
-			mu.Unlock()
-			return nil
+	for i := 0; i < 7; i++ {
+		r := <-results
+		if r.err != nil {
+			c.logger.Error("failed to fetch "+r.name, "error", r.err)
+			errors = append(errors, r.err)
+		} else {
+			events = append(events, r.events...)
 		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
-
-	// Fetch check runs
-	g.Go(func() error {
-		e, err := c.checkRuns(gctx, owner, repo, &pr)
-		if err != nil {
-			c.logger.Error("failed to fetch check runs", "error", err)
-			mu.Lock()
-			errors = append(errors, err)
-			mu.Unlock()
-			return nil
-		}
-		mu.Lock()
-		events = append(events, e...)
-		mu.Unlock()
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		return nil, err
 	}
-
+	
+	// If we have no events at all and errors occurred, return the first error
 	if len(events) == 0 && len(errors) > 0 {
 		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
 	}
+	
+	// Log a warning if we had partial failures
+	if len(errors) > 0 {
+		c.logger.Warn("some event fetches failed but returning partial data",
+			"error_count", len(errors),
+			"event_count", len(events))
+	}
 
 	if pr.Merged {
-		events = append(events, Event{
+		mergedEvent := Event{
 			Kind:      "pr_merged",
 			Timestamp: pr.MergedAt,
-			Actor:     pr.MergedBy.Login,
-			Bot:       isBot(pr.MergedBy),
-		})
+		}
+		if pr.MergedBy != nil {
+			mergedEvent.Actor = pr.MergedBy.Login
+			mergedEvent.Bot = isBot(pr.MergedBy)
+		} else {
+			mergedEvent.Actor = "unknown"
+		}
+		events = append(events, mergedEvent)
 	} else if pr.State == "closed" {
 		closedEvent := Event{
 			Kind:        "pr_closed",

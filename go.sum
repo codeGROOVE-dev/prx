@@ -1,4 +1,2 @@
 github.com/codeGROOVE-dev/retry-go v1.1.0 h1:cNG+Sev2knCrJ/t2n55lWXnQHhneL3CQy1Wyl5p5M/4=
 github.com/codeGROOVE-dev/retry-go v1.1.0/go.mod h1:Ep1oqpcchCxo9yGedTBOF9D1/9m+krl6oF85kYlmm14=
-golang.org/x/sync v0.16.0 h1:ycBJEhp9p4vXvUZNszeOq0kGTPghopOL8q0fq3vstxw=
-golang.org/x/sync v0.16.0/go.mod h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=

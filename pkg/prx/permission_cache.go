@@ -103,9 +103,8 @@ func (pc *permissionCache) loadFromDisk() error {
 	defer pc.mu.Unlock()
 
 	// Only load non-expired entries
-	now := time.Now()
 	for key, entry := range cache {
-		if now.Sub(entry.CachedAt) <= permissionCacheDuration {
+		if time.Since(entry.CachedAt) <= permissionCacheDuration {
 			pc.memory[key] = entry
 		}
 	}
@@ -149,9 +148,8 @@ func (pc *permissionCache) saveToDisk() error {
 // cleanup removes expired entries from memory and disk.
 func (pc *permissionCache) cleanup() error {
 	pc.mu.Lock()
-	now := time.Now()
 	for key, entry := range pc.memory {
-		if now.Sub(entry.CachedAt) > permissionCacheDuration {
+		if time.Since(entry.CachedAt) > permissionCacheDuration {
 			delete(pc.memory, key)
 		}
 	}
