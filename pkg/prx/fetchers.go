@@ -203,13 +203,21 @@ func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, ite
 	event := &Event{
 		Kind:      item.Event,
 		Timestamp: item.CreatedAt,
-		Actor:     item.Actor.Login,
-		Bot:       isBot(item.Actor),
 	}
 	
-	// Set write_access if we have author association
-	if item.AuthorAssociation != "" {
-		event.WriteAccess = c.writeAccess(ctx, owner, repo, item.Actor, item.AuthorAssociation)
+	// Handle potentially nil Actor
+	if item.Actor != nil {
+		event.Actor = item.Actor.Login
+		event.Bot = isBot(item.Actor)
+		
+		// Set write_access if we have author association
+		if item.AuthorAssociation != "" {
+			event.WriteAccess = c.writeAccess(ctx, owner, repo, item.Actor, item.AuthorAssociation)
+		}
+	} else {
+		event.Actor = "unknown"
+		event.Bot = false
+		event.WriteAccess = WriteAccessNo
 	}
 
 	// Set target based on event type
