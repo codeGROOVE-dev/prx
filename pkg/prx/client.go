@@ -5,6 +5,7 @@ package prx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,7 +19,11 @@ import (
 
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
-	github          githubAPIClient
+	github          interface {
+		get(ctx context.Context, path string, v any) (*githubResponse, error)
+		raw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error)
+		userPermission(ctx context.Context, owner, repo, username string) (string, error)
+	}
 	logger          *slog.Logger
 	token           string // Store token for recreating client with new transport
 	permissionCache *permissionCache
@@ -35,33 +40,31 @@ func isBot(user *githubUser) bool {
 		strings.HasSuffix(user.Login, "-robot")
 }
 
-// getWriteAccess returns the write access level for a user
-func (c *Client) getWriteAccess(ctx context.Context, owner, repo string, user *githubUser, association string) *int {
+// writeAccess returns the write access level for a user
+func (c *Client) writeAccess(ctx context.Context, owner, repo string, user *githubUser, association string) int {
 	if user == nil {
-		return nil
+		return WriteAccessNA
 	}
-	
+
 	// Check association-based access
 	switch association {
 	case "OWNER", "COLLABORATOR":
-		access := WriteAccessDefinitely
-		return &access
+		return WriteAccessDefinitely
 	case "MEMBER":
 		// Need to check via API
 		perm, _ := c.userPermissionCached(ctx, owner, repo, user.Login, association)
 		if perm == "uncertain" {
-			access := WriteAccessLikely
-			return &access
+			return WriteAccessLikely
 		}
 		if perm == "admin" || perm == "write" {
-			access := WriteAccessDefinitely
-			return &access
+			return WriteAccessDefinitely
 		}
+		return WriteAccessUnlikely
+	case "CONTRIBUTOR", "NONE":
+		return WriteAccessUnlikely
+	default:
+		return WriteAccessNA
 	}
-	
-	// Default: no write access
-	access := WriteAccessUnlikely
-	return &access
 }
 
 // Option is a function that configures a Client.
@@ -127,23 +130,23 @@ func (c *Client) userPermissionCached(ctx context.Context, owner, repo, username
 		c.logger.Info("permission cache hit", "owner", owner, "repo", repo, "user", username, "permission", perm)
 		return perm, nil
 	}
-	
+
 	// Not in cache, fetch from API
-	c.logger.Info("permission cache miss - checking user permissions via API", 
-		"owner", owner, 
-		"repo", repo, 
+	c.logger.Info("permission cache miss - checking user permissions via API",
+		"owner", owner,
+		"repo", repo,
 		"user", username,
 		"author_association", authorAssociation,
 		"reason", "not in cache")
-	
+
 	perm, err := c.github.userPermission(ctx, owner, repo, username)
 	if err != nil {
 		// Check if this is a 403 error (no permission to check)
 		var apiErr *GitHubAPIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
-			c.logger.Info("permission check failed with 403, assuming write access for MEMBER", 
-				"owner", owner, 
-				"repo", repo, 
+			c.logger.Info("permission check failed with 403, assuming write access for MEMBER",
+				"owner", owner,
+				"repo", repo,
 				"user", username,
 				"author_association", authorAssociation,
 				"error", apiErr.Body)
@@ -156,13 +159,13 @@ func (c *Client) userPermissionCached(ctx context.Context, owner, repo, username
 		}
 		return perm, err
 	}
-	
+
 	// Cache the result
 	if err := c.permissionCache.set(owner, repo, username, perm); err != nil {
 		// Log error but don't fail the request
 		c.logger.Warn("failed to cache permission", "error", err)
 	}
-	
+
 	return perm, nil
 }
 
@@ -194,30 +197,28 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		"pr", prNumber)
 
 	pullRequest := PullRequest{
-		Number:            pr.Number,
-		Title:             pr.Title,
-		Body:              truncate(pr.Body, 256),
-		State:             pr.State,
-		Draft:             pr.Draft,
-		Merged:            pr.Merged,
-		Mergeable:         pr.Mergeable,
-		MergeableState:    pr.MergeableState,
-		CreatedAt:         pr.CreatedAt,
-		UpdatedAt:         pr.UpdatedAt,
-		Author:            pr.User.Login,
-		AuthorBot:         isBot(pr.User),
-		Additions:         pr.Additions,
-		Deletions:         pr.Deletions,
-		ChangedFiles:      pr.ChangedFiles,
+		Number:         pr.Number,
+		Title:          pr.Title,
+		Body:           truncate(pr.Body, 256),
+		State:          pr.State,
+		Draft:          pr.Draft,
+		Merged:         pr.Merged,
+		Mergeable:      pr.Mergeable,
+		MergeableState: pr.MergeableState,
+		CreatedAt:      pr.CreatedAt,
+		UpdatedAt:      pr.UpdatedAt,
+		Author:         pr.User.Login,
+		AuthorBot:      isBot(pr.User),
+		Additions:      pr.Additions,
+		Deletions:      pr.Deletions,
+		ChangedFiles:   pr.ChangedFiles,
 	}
-	
+
 	// Check if PR author has write access
 	if pr.User != nil {
-		writeAccess := c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-		if writeAccess != nil {
-			// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
-			pullRequest.AuthorHasWriteAccess = (*writeAccess != WriteAccessUnlikely)
-		}
+		writeAccess := c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
+		// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
+		pullRequest.AuthorHasWriteAccess = (writeAccess > WriteAccessNA)
 	}
 
 	if !pr.ClosedAt.IsZero() {
@@ -249,11 +250,11 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 	}
 
 	prOpenedEvent := Event{
-		Kind:        PROpened,
+		Kind:        "pr_opened",
 		Timestamp:   pr.CreatedAt,
 		Actor:       pr.User.Login,
 		Bot:         isBot(pr.User),
-		WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+		WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
 	}
 	events = append(events, prOpenedEvent)
 
@@ -332,18 +333,18 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 
 	if pr.Merged {
 		events = append(events, Event{
-			Kind:      PRMerged,
+			Kind:      "pr_merged",
 			Timestamp: pr.MergedAt,
 			Actor:     pr.MergedBy.Login,
 			Bot:       isBot(pr.MergedBy),
 		})
 	} else if pr.State == "closed" {
 		closedEvent := Event{
-			Kind:        PRClosed,
+			Kind:        "pr_closed",
 			Timestamp:   pr.ClosedAt,
 			Actor:       pr.User.Login,
 			Bot:         isBot(pr.User),
-			WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
 		}
 		events = append(events, closedEvent)
 	}
@@ -352,6 +353,9 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 	events = filterEvents(events)
 
 	sortEventsByTimestamp(events)
+
+	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
+	upgradeWriteAccess(events)
 
 	testSummary := calculateTestSummary(events)
 	if testSummary.Passing > 0 || testSummary.Failing > 0 || testSummary.Pending > 0 {

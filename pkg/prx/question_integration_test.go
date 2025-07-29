@@ -41,7 +41,7 @@ func TestQuestionFieldIntegration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Simulate creating an event like in reviews
 			event := Event{
-				Kind:     Review,
+				Kind:     "review",
 				Body:     tt.body,
 				Outcome:  tt.outcome,
 				Question: containsQuestion(tt.body),

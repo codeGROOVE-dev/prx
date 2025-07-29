@@ -1,6 +1,7 @@
 package prx
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -145,20 +146,17 @@ func TestParseTimelineEvent_Targets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event := c.parseTimelineEvent(tt.event)
+			event := c.parseTimelineEvent(context.Background(), "owner", "repo", tt.event)
 			if event == nil {
 				t.Fatal("expected non-nil event")
 			}
 
-			if len(event.Targets) != len(tt.expectedTargets) {
-				t.Errorf("expected %d targets, got %d", len(tt.expectedTargets), len(event.Targets))
-				return
-			}
-
-			for i, target := range event.Targets {
-				if target != tt.expectedTargets[i] {
-					t.Errorf("expected target[%d] = %q, got %q", i, tt.expectedTargets[i], target)
+			if len(tt.expectedTargets) > 0 {
+				if event.Target != tt.expectedTargets[0] {
+					t.Errorf("expected target %q, got %q", tt.expectedTargets[0], event.Target)
 				}
+			} else if event.Target != "" {
+				t.Errorf("expected no target, got %q", event.Target)
 			}
 		})
 	}

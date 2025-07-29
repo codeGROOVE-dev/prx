@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// mockGithubClient implements githubAPIClient for testing
+// mockGithubClient is a mock implementation for testing
 type mockGithubClient struct {
 	mu        sync.Mutex
 	responses map[string]any
@@ -30,7 +30,7 @@ func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*github
 	return &githubResponse{NextPage: 0}, nil
 }
 
-func (m *mockGithubClient) getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
+func (m *mockGithubClient) raw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, path)
 	m.mu.Unlock()
@@ -47,13 +47,13 @@ func (m *mockGithubClient) getRaw(ctx context.Context, path string) (json.RawMes
 func (m *mockGithubClient) userPermission(ctx context.Context, owner, repo, username string) (string, error) {
 	path := "/repos/" + owner + "/" + repo + "/collaborators/" + username + "/permission"
 	m.calls = append(m.calls, path)
-	
+
 	if response, ok := m.responses[path]; ok {
 		if perm, ok := response.(string); ok {
 			return perm, nil
 		}
 	}
-	
+
 	// Default to read access
 	return "read", nil
 }
@@ -62,14 +62,14 @@ func TestClientWithMock(t *testing.T) {
 	mock := &mockGithubClient{
 		responses: map[string]any{
 			"/repos/owner/repo/pulls/1": githubPullRequest{
-				Number:    1,
-				Title:     "Test PR",
-				Body:      "Test description",
-				CreatedAt: time.Now().Add(-24 * time.Hour),
-				UpdatedAt: time.Now().Add(-1 * time.Hour),
-				User:      &githubUser{Login: "testuser"},
+				Number:            1,
+				Title:             "Test PR",
+				Body:              "Test description",
+				CreatedAt:         time.Now().Add(-24 * time.Hour),
+				UpdatedAt:         time.Now().Add(-1 * time.Hour),
+				User:              &githubUser{Login: "testuser"},
 				AuthorAssociation: "CONTRIBUTOR",
-				State:     "open",
+				State:             "open",
 				Head: struct {
 					SHA string `json:"sha"`
 					Ref string `json:"ref"`
@@ -129,7 +129,7 @@ func TestClientWithMock(t *testing.T) {
 	callsCopy := make([]string, len(mock.calls))
 	copy(callsCopy, mock.calls)
 	mock.mu.Unlock()
-	
+
 	if actualCalls != len(expectedCalls) {
 		t.Errorf("Expected %d API calls, got %d", len(expectedCalls), actualCalls)
 		t.Logf("Actual calls: %v", callsCopy)

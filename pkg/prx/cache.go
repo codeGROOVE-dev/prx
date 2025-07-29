@@ -29,6 +29,22 @@ type cacheEntry struct {
 	CachedAt  time.Time       `json:"cached_at"`
 }
 
+// createEvent is a helper function to create an Event with common fields
+func createEvent(kind string, timestamp time.Time, user *githubUser, body string) Event {
+	body = truncate(body, 256)
+	event := Event{
+		Kind:      kind,
+		Timestamp: timestamp,
+		Body:      body,
+		Question:  containsQuestion(body),
+	}
+	if user != nil {
+		event.Actor = user.Login
+		event.Bot = isBot(user)
+	}
+	return event
+}
+
 // NewCacheClient creates a new caching client with the given cache directory.
 func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
 	cleanPath := filepath.Clean(cacheDir)
@@ -59,7 +75,6 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 	return cc, nil
 }
 
-
 // PullRequest fetches a pull request with all its events and metadata, with caching support.
 func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
 	c.logger.Info("fetching pull request with cache",
@@ -77,30 +92,28 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	var events []Event
 
 	pullRequest := PullRequest{
-		Number:            pr.Number,
-		Title:             pr.Title,
-		Body:              pr.Body,
-		State:             pr.State,
-		Draft:             pr.Draft,
-		Merged:            pr.Merged,
-		Mergeable:         pr.Mergeable,
-		MergeableState:    pr.MergeableState,
-		CreatedAt:         pr.CreatedAt,
-		UpdatedAt:         pr.UpdatedAt,
-		Author:            pr.User.Login,
-		AuthorBot:         isBot(pr.User),
-		Additions:         pr.Additions,
-		Deletions:         pr.Deletions,
-		ChangedFiles:      pr.ChangedFiles,
+		Number:         pr.Number,
+		Title:          pr.Title,
+		Body:           pr.Body,
+		State:          pr.State,
+		Draft:          pr.Draft,
+		Merged:         pr.Merged,
+		Mergeable:      pr.Mergeable,
+		MergeableState: pr.MergeableState,
+		CreatedAt:      pr.CreatedAt,
+		UpdatedAt:      pr.UpdatedAt,
+		Author:         pr.User.Login,
+		AuthorBot:      isBot(pr.User),
+		Additions:      pr.Additions,
+		Deletions:      pr.Deletions,
+		ChangedFiles:   pr.ChangedFiles,
 	}
-	
+
 	// Check if PR author has write access
 	if pr.User != nil {
-		writeAccess := c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-		if writeAccess != nil {
-			// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
-			pullRequest.AuthorHasWriteAccess = (*writeAccess != WriteAccessUnlikely)
-		}
+		writeAccess := c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
+		// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
+		pullRequest.AuthorHasWriteAccess = (writeAccess > WriteAccessNA)
 	}
 
 	if !pr.ClosedAt.IsZero() {
@@ -114,11 +127,11 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	}
 
 	prOpenedEvent := Event{
-		Kind:        PROpened,
+		Kind:        "pr_opened",
 		Timestamp:   pr.CreatedAt,
 		Actor:       pr.User.Login,
 		Bot:         isBot(pr.User),
-		WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+		WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
 	}
 	events = append(events, prOpenedEvent)
 
@@ -195,18 +208,18 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 
 	if pr.Merged {
 		events = append(events, Event{
-			Kind:      PRMerged,
+			Kind:      "pr_merged",
 			Timestamp: pr.MergedAt,
 			Actor:     pr.MergedBy.Login,
 			Bot:       isBot(pr.MergedBy),
 		})
 	} else if pr.State == "closed" {
 		closedEvent := Event{
-			Kind:        PRClosed,
+			Kind:        "pr_closed",
 			Timestamp:   pr.ClosedAt,
 			Actor:       pr.User.Login,
 			Bot:         isBot(pr.User),
-			WriteAccess: c.getWriteAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
 		}
 		events = append(events, closedEvent)
 	}
@@ -215,6 +228,9 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	events = filterEvents(events)
 
 	sortEventsByTimestamp(events)
+
+	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
+	upgradeWriteAccess(events)
 
 	c.logger.Info("successfully fetched pull request with cache",
 		"owner", owner,
@@ -268,7 +284,7 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 		"repo", repo,
 		"pr", prNumber)
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
-	rawData, _, err := c.github.getRaw(ctx, path)
+	rawData, _, err := c.github.raw(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +323,7 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 
 	// Fetch from API
 	c.logger.Info("fetching from GitHub API", "type", dataType, "path", path)
-	rawData, _, err := c.github.getRaw(ctx, path)
+	rawData, _, err := c.github.raw(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +340,6 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 	return rawData, nil
 }
 
-
 // cachedCommits fetches commits with caching.
 func (c *CacheClient) cachedCommits(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) ([]Event, error) {
 	var allEvents []Event
@@ -333,7 +348,7 @@ func (c *CacheClient) cachedCommits(ctx context.Context, owner, repo string, prN
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?page=%d&per_page=%d",
 			owner, repo, prNumber, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "commits", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -347,18 +362,18 @@ func (c *CacheClient) cachedCommits(ctx context.Context, owner, repo string, prN
 		// Process commits into events
 		for _, commit := range commits {
 			event := Event{
-				Kind:      Commit,
+				Kind:      "commit",
 				Timestamp: commit.Commit.Author.Date,
 				Body:      truncate(commit.Commit.Message, 256),
 			}
-			
+
 			if commit.Author != nil {
 				event.Actor = commit.Author.Login
 				event.Bot = isBot(commit.Author)
 			} else {
 				event.Actor = "unknown"
 			}
-			
+
 			allEvents = append(allEvents, event)
 		}
 
@@ -380,7 +395,7 @@ func (c *CacheClient) cachedComments(ctx context.Context, owner, repo string, pr
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments?page=%d&per_page=%d",
 			owner, repo, prNumber, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "comments", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -392,9 +407,9 @@ func (c *CacheClient) cachedComments(ctx context.Context, owner, repo string, pr
 		}
 
 		for _, comment := range comments {
-			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body)
-			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
-			
+			event := createEvent("comment", comment.CreatedAt, comment.User, comment.Body)
+			event.WriteAccess = c.writeAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
+
 			allEvents = append(allEvents, event)
 		}
 
@@ -415,7 +430,7 @@ func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prN
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?page=%d&per_page=%d",
 			owner, repo, prNumber, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "reviews", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -432,11 +447,11 @@ func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prN
 					"reviewer", review.User.Login,
 					"author_association", review.AuthorAssociation,
 					"state", review.State)
-				
-				event := createEvent(Review, review.SubmittedAt, review.User, review.Body)
+
+				event := createEvent("review", review.SubmittedAt, review.User, review.Body)
 				event.Outcome = review.State // "approved", "changes_requested", "commented"
-				event.WriteAccess = c.getWriteAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
-				
+				event.WriteAccess = c.writeAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
+
 				allEvents = append(allEvents, event)
 			}
 		}
@@ -458,7 +473,7 @@ func (c *CacheClient) cachedReviewComments(ctx context.Context, owner, repo stri
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?page=%d&per_page=%d",
 			owner, repo, prNumber, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "review_comments", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -470,9 +485,9 @@ func (c *CacheClient) cachedReviewComments(ctx context.Context, owner, repo stri
 		}
 
 		for _, comment := range comments {
-			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body)
-			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
-			
+			event := createEvent("review_comment", comment.CreatedAt, comment.User, comment.Body)
+			event.WriteAccess = c.writeAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
+
 			allEvents = append(allEvents, event)
 		}
 
@@ -493,7 +508,7 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline?page=%d&per_page=%d",
 			owner, repo, prNumber, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "timeline", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -516,29 +531,31 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 					continue
 				}
 				event = Event{
-					Kind:      EventKind(te.Event),
-					Timestamp: te.CreatedAt,
-					Actor:     te.Actor.Login,
-					Bot:       isBot(te.Actor),
-					Targets:   []string{te.Assignee.Login},
+					Kind:        te.Event,
+					Timestamp:   te.CreatedAt,
+					Actor:       te.Actor.Login,
+					Bot:         isBot(te.Actor),
+					Target:      te.Assignee.Login,
+					TargetIsBot: isBot(te.Assignee),
 				}
 			case "review_requested", "review_request_removed":
 				if te.RequestedReviewer == nil {
 					continue
 				}
 				event = Event{
-					Kind:      EventKind(te.Event),
-					Timestamp: te.CreatedAt,
-					Actor:     te.Actor.Login,
-					Bot:       isBot(te.Actor),
-					Targets:   []string{te.RequestedReviewer.Login},
+					Kind:        te.Event,
+					Timestamp:   te.CreatedAt,
+					Actor:       te.Actor.Login,
+					Bot:         isBot(te.Actor),
+					Target:      te.RequestedReviewer.Login,
+					TargetIsBot: isBot(te.RequestedReviewer),
 				}
 			case "labeled", "unlabeled":
 				if te.Label.Name == "" {
 					continue
 				}
 				event = Event{
-					Kind:      EventKind(te.Event),
+					Kind:      te.Event,
 					Timestamp: te.CreatedAt,
 					Actor:     te.Actor.Login,
 					Bot:       isBot(te.Actor),
@@ -546,14 +563,14 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 				}
 			case "mentioned":
 				event = Event{
-					Kind:      EventKind(te.Event),
+					Kind:      te.Event,
 					Timestamp: te.CreatedAt,
 					Actor:     te.Actor.Login,
 					Bot:       isBot(te.Actor),
 				}
 			case "convert_to_draft", "ready_for_review":
 				event = Event{
-					Kind:      EventKind(te.Event),
+					Kind:      te.Event,
 					Timestamp: te.CreatedAt,
 					Actor:     te.Actor.Login,
 					Bot:       isBot(te.Actor),
@@ -582,7 +599,7 @@ func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/statuses/%s?page=%d&per_page=%d",
 			owner, repo, pr.Head.SHA, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "statuses", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -595,7 +612,7 @@ func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string
 
 		for _, status := range statuses {
 			event := Event{
-				Kind:      StatusCheck,
+				Kind:      "status_check",
 				Timestamp: status.CreatedAt,
 				Actor:     status.Creator.Login,
 				Bot:       isBot(status.Creator),
@@ -626,7 +643,7 @@ func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, p
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?page=%d&per_page=%d",
 			owner, repo, pr.Head.SHA, page, maxPerPage)
-		
+
 		rawData, err := c.cachedFetch(ctx, "check_runs", path, referenceTime)
 		if err != nil {
 			return nil, err
@@ -639,7 +656,7 @@ func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, p
 
 		for _, run := range response.CheckRuns {
 			event := Event{
-				Kind:      CheckRun,
+				Kind:      "check_run",
 				Timestamp: run.CompletedAt,
 				Actor:     "github",
 				Bot:       true,
@@ -661,7 +678,6 @@ func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, p
 
 	return allEvents, nil
 }
-
 
 func (c *CacheClient) cacheKey(parts ...string) string {
 	key := strings.Join(parts, "/")

@@ -33,7 +33,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Base == nil {
 		t.Base = http.DefaultTransport
 	}
-	
+
 	// Log the outgoing request
 	slog.Info("HTTP request starting",
 		"method", req.Method,
@@ -72,13 +72,14 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				lastErr = err
 				return err
 			}
-			
+
 			slog.Info("HTTP response received",
 				"status", resp.StatusCode,
 				"url", req.URL.String(),
 				"elapsed", elapsed)
 
-			if shouldRetry(resp.StatusCode) {
+			// Retry on 429 (rate limit) or 5xx server errors
+			if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
 				bodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -98,7 +99,10 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		retry.MaxDelay(retryMaxDelay),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(retryMaxJitter),
-		retry.RetryIf(isRetryableError),
+		retry.RetryIf(func(err error) bool {
+			_, ok := err.(*retryableError)
+			return ok
+		}),
 	)
 
 	if err != nil {
@@ -120,13 +124,3 @@ func (e *retryableError) Error() string {
 	return http.StatusText(e.StatusCode)
 }
 
-// shouldRetry returns true if the HTTP status code indicates the request should be retried.
-func shouldRetry(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests || (statusCode >= 500 && statusCode < 600)
-}
-
-// isRetryableError determines if an error should trigger a retry.
-func isRetryableError(err error) bool {
-	_, ok := err.(*retryableError)
-	return ok
-}

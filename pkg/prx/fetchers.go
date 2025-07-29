@@ -3,24 +3,9 @@ package prx
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 const maxPerPage = 100
-
-// createEvent creates an event with basic information
-func createEvent(kind EventKind, timestamp time.Time, user *githubUser, body string) Event {
-	body = truncate(body, 256)
-	return Event{
-		Kind:      kind,
-		Timestamp: timestamp,
-		Actor:     user.Login,
-		Body:      body,
-		Question:  containsQuestion(body),
-		Bot:       isBot(user),
-		Targets:   extractMentions(body),
-	}
-}
 
 func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
 	c.logger.Debug("fetching commits", "owner", owner, "repo", repo, "pr", prNumber)
@@ -39,11 +24,11 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 
 		for _, commit := range commits {
 			event := Event{
-				Kind:      Commit,
+				Kind:      "commit",
 				Timestamp: commit.Commit.Author.Date,
 				Body:      truncate(commit.Commit.Message, 256),
 			}
-			
+
 			// Handle case where commit.Author might be nil
 			if commit.Author != nil {
 				event.Actor = commit.Author.Login
@@ -52,7 +37,7 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 				// When GitHub can't associate a commit with a user (e.g., different email)
 				event.Actor = "unknown"
 			}
-			
+
 			events = append(events, event)
 		}
 
@@ -81,8 +66,16 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 		}
 
 		for _, comment := range comments {
-			event := createEvent(Comment, comment.CreatedAt, comment.User, comment.Body)
-			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
+			body := truncate(comment.Body, 256)
+			event := Event{
+				Kind:      "comment",
+				Timestamp: comment.CreatedAt,
+				Actor:     comment.User.Login,
+				Body:      body,
+				Question:  containsQuestion(body),
+				Bot:       isBot(comment.User),
+			}
+			event.WriteAccess = c.writeAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
 			events = append(events, event)
 		}
 
@@ -112,9 +105,17 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 
 		for _, review := range reviews {
 			if review.State != "" {
-				event := createEvent(Review, review.SubmittedAt, review.User, review.Body)
+				body := truncate(review.Body, 256)
+				event := Event{
+					Kind:      "review",
+					Timestamp: review.SubmittedAt,
+					Actor:     review.User.Login,
+					Body:      body,
+					Question:  containsQuestion(body),
+					Bot:       isBot(review.User),
+				}
 				event.Outcome = review.State // "approved", "changes_requested", "commented"
-				event.WriteAccess = c.getWriteAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
+				event.WriteAccess = c.writeAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
 				events = append(events, event)
 			}
 		}
@@ -144,8 +145,16 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 		}
 
 		for _, comment := range comments {
-			event := createEvent(ReviewComment, comment.CreatedAt, comment.User, comment.Body)
-			event.WriteAccess = c.getWriteAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
+			body := truncate(comment.Body, 256)
+			event := Event{
+				Kind:      "review_comment",
+				Timestamp: comment.CreatedAt,
+				Actor:     comment.User.Login,
+				Body:      body,
+				Question:  containsQuestion(body),
+				Bot:       isBot(comment.User),
+			}
+			event.WriteAccess = c.writeAccess(ctx, owner, repo, comment.User, comment.AuthorAssociation)
 			events = append(events, event)
 		}
 
@@ -174,7 +183,7 @@ func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumbe
 		}
 
 		for _, item := range timeline {
-			event := c.parseTimelineEvent(item)
+			event := c.parseTimelineEvent(ctx, owner, repo, item)
 			if event != nil {
 				events = append(events, *event)
 			}
@@ -190,51 +199,39 @@ func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumbe
 	return events, nil
 }
 
-var eventTypeMap = map[string]EventKind{
-	"assigned":               Assigned,
-	"unassigned":             Unassigned,
-	"labeled":                Labeled,
-	"unlabeled":              Unlabeled,
-	"milestoned":             Milestoned,
-	"demilestoned":           Demilestoned,
-	"review_requested":       ReviewRequested,
-	"review_request_removed": ReviewRequestRemoved,
-	"reopened":               PRReopened,
-	"head_ref_force_pushed":  HeadRefForcePushed,
-}
-
-func (c *Client) parseTimelineEvent(item *githubTimelineEvent) *Event {
-	eventType, ok := eventTypeMap[item.Event]
-	if !ok {
-		return nil
-	}
-
+func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, item *githubTimelineEvent) *Event {
 	event := &Event{
-		Kind:      eventType,
+		Kind:      item.Event,
 		Timestamp: item.CreatedAt,
 		Actor:     item.Actor.Login,
 		Bot:       isBot(item.Actor),
 	}
+	
+	// Set write_access if we have author association
+	if item.AuthorAssociation != "" {
+		event.WriteAccess = c.writeAccess(ctx, owner, repo, item.Actor, item.AuthorAssociation)
+	}
 
+	// Set target based on event type
 	switch item.Event {
 	case "assigned", "unassigned":
 		if item.Assignee != nil {
-			event.Targets = []string{item.Assignee.Login}
+			event.Target = item.Assignee.Login
+			event.TargetIsBot = isBot(item.Assignee)
 		}
 	case "labeled", "unlabeled":
-		if item.Label.Name != "" {
-			event.Targets = []string{item.Label.Name}
-		}
+		event.Target = item.Label.Name
 	case "milestoned", "demilestoned":
-		if item.Milestone.Title != "" {
-			event.Targets = []string{item.Milestone.Title}
-		}
+		event.Target = item.Milestone.Title
 	case "review_requested", "review_request_removed":
 		if item.RequestedReviewer != nil {
-			event.Targets = []string{item.RequestedReviewer.Login}
-		} else if item.RequestedTeam.Name != "" {
-			event.Targets = []string{item.RequestedTeam.Name}
+			event.Target = item.RequestedReviewer.Login
+			event.TargetIsBot = isBot(item.RequestedReviewer)
+		} else {
+			event.Target = item.RequestedTeam.Name
 		}
+	case "mentioned":
+		event.Body = "User was mentioned"
 	}
 
 	return event
@@ -258,10 +255,10 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 
 	for _, status := range statuses {
 		event := Event{
-			Kind:      StatusCheck,
+			Kind:      "status_check",
 			Timestamp: status.CreatedAt,
 			Actor:     status.Creator.Login,
-			Outcome:   status.State, // "success", "failure", "pending", "error"
+			Outcome:   status.State,   // "success", "failure", "pending", "error"
 			Body:      status.Context, // The status check name
 		}
 		if isBot(status.Creator) {
@@ -302,11 +299,11 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 		}
 
 		event := Event{
-			Kind:      CheckRun,
+			Kind:      "check_run",
 			Timestamp: timestamp,
 			Actor:     actor,
 			Outcome:   checkRun.Conclusion, // "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
-			Body:      checkRun.Name,        // Store check run name in body field
+			Body:      checkRun.Name,       // Store check run name in body field
 		}
 		// GitHub Apps are always considered bots
 		if checkRun.App.Owner != nil {

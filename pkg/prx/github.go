@@ -31,12 +31,6 @@ func (e *GitHubAPIError) Error() string {
 	return fmt.Sprintf("github API error: %s", e.Status)
 }
 
-// githubAPIClient defines the interface for GitHub API operations.
-type githubAPIClient interface {
-	get(ctx context.Context, path string, v any) (*githubResponse, error)
-	getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error)
-	userPermission(ctx context.Context, owner, repo, username string) (string, error)
-}
 
 // githubClient is a client for interacting with the GitHub API.
 type githubClient struct {
@@ -44,7 +38,6 @@ type githubClient struct {
 	token  string
 	api    string
 }
-
 
 // newGithubClient creates a new githubClient.
 func newGithubClient(client *http.Client, token string) *githubClient {
@@ -115,16 +108,16 @@ func (c *githubClient) get(ctx context.Context, path string, v any) (*githubResp
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if err := json.Unmarshal(data, v); err != nil {
 		return nil, err
 	}
-	
+
 	return resp, nil
 }
 
-// getRaw makes a GET request to the GitHub API and returns the raw JSON response.
-func (c *githubClient) getRaw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
+// raw makes a GET request to the GitHub API and returns the raw JSON response.
+func (c *githubClient) raw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
 	data, resp, err := c.doRequest(ctx, path)
 	if err != nil {
 		return nil, nil, err
@@ -136,16 +129,16 @@ func (c *githubClient) getRaw(ctx context.Context, path string) (json.RawMessage
 // Returns "admin", "write", "read", or "none".
 func (c *githubClient) userPermission(ctx context.Context, owner, repo, username string) (string, error) {
 	path := fmt.Sprintf("/repos/%s/%s/collaborators/%s/permission", owner, repo, username)
-	
+
 	var permResp struct {
 		Permission string `json:"permission"`
 	}
-	
+
 	if _, err := c.get(ctx, path, &permResp); err != nil {
 		// Return the error so caller can handle it appropriately
 		return "", err
 	}
-	
+
 	return permResp.Permission, nil
 }
 
@@ -201,11 +194,12 @@ type githubReviewComment struct {
 
 // githubTimelineEvent represents a GitHub timeline event.
 type githubTimelineEvent struct {
-	Event     string      `json:"event"`
-	Actor     *githubUser `json:"actor"`
-	CreatedAt time.Time   `json:"created_at"`
-	Assignee  *githubUser `json:"assignee"`
-	Label     struct {
+	Event             string      `json:"event"`
+	Actor             *githubUser `json:"actor"`
+	CreatedAt         time.Time   `json:"created_at"`
+	AuthorAssociation string      `json:"author_association"`
+	Assignee          *githubUser `json:"assignee"`
+	Label             struct {
 		Name string `json:"name"`
 	} `json:"label"`
 	Milestone struct {
@@ -219,7 +213,7 @@ type githubTimelineEvent struct {
 
 // githubStatus represents a GitHub status.
 type githubStatus struct {
-	Context     string      `json:"context"`    // The status check name
+	Context     string      `json:"context"`     // The status check name
 	Description string      `json:"description"` // Optional description
 	Creator     *githubUser `json:"creator"`
 	CreatedAt   time.Time   `json:"created_at"`
@@ -230,7 +224,7 @@ type githubStatus struct {
 // githubCheckRun represents a GitHub check run.
 type githubCheckRun struct {
 	Name string `json:"name"`
-	App struct {
+	App  struct {
 		Owner *githubUser `json:"owner"`
 	} `json:"app"`
 	StartedAt   time.Time `json:"started_at"`
@@ -265,19 +259,19 @@ type githubPullRequest struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
-	AuthorAssociation string `json:"author_association"`
-	Mergeable         *bool  `json:"mergeable"`       // Can be true, false, or null
-	MergeableState    string `json:"mergeable_state"` // "clean", "dirty", "blocked", "unstable", "unknown"
-	Draft             bool   `json:"draft"`           // Whether the PR is a draft
-	Additions         int    `json:"additions"`       // Lines added
-	Deletions         int    `json:"deletions"`       // Lines removed
-	ChangedFiles      int    `json:"changed_files"`   // Number of files changed
-	Commits           int           `json:"commits"`         // Number of commits
-	ReviewComments    int           `json:"review_comments"` // Number of review comments
-	Comments          int           `json:"comments"`        // Number of issue comments
-	Assignees         []*githubUser `json:"assignees"`       // Current assignees
+	AuthorAssociation  string        `json:"author_association"`
+	Mergeable          *bool         `json:"mergeable"`           // Can be true, false, or null
+	MergeableState     string        `json:"mergeable_state"`     // "clean", "dirty", "blocked", "unstable", "unknown"
+	Draft              bool          `json:"draft"`               // Whether the PR is a draft
+	Additions          int           `json:"additions"`           // Lines added
+	Deletions          int           `json:"deletions"`           // Lines removed
+	ChangedFiles       int           `json:"changed_files"`       // Number of files changed
+	Commits            int           `json:"commits"`             // Number of commits
+	ReviewComments     int           `json:"review_comments"`     // Number of review comments
+	Comments           int           `json:"comments"`            // Number of issue comments
+	Assignees          []*githubUser `json:"assignees"`           // Current assignees
 	RequestedReviewers []*githubUser `json:"requested_reviewers"` // Pending reviewers
-	Labels            []struct {
+	Labels             []struct {
 		Name string `json:"name"`
 	} `json:"labels"` // PR labels
 }

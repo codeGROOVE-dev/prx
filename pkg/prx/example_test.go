@@ -60,7 +60,7 @@ func ExampleClient_PullRequest() {
 		data.PullRequest.ChangedFiles)
 
 	// Count events by type
-	eventCounts := make(map[prx.EventKind]int)
+	eventCounts := make(map[string]int)
 	for _, event := range data.Events {
 		eventCounts[event.Kind]++
 	}
