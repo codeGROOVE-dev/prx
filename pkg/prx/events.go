@@ -4,6 +4,101 @@ import (
 	"time"
 )
 
+// Event kind constants
+const (
+	// Core events
+	EventKindCommit        = "commit"
+	EventKindComment       = "comment"
+	EventKindReview        = "review"
+	EventKindReviewComment = "review_comment"
+	
+	// Label events
+	EventKindLabeled   = "labeled"
+	EventKindUnlabeled = "unlabeled"
+	
+	// Assignment events
+	EventKindAssigned   = "assigned"
+	EventKindUnassigned = "unassigned"
+	
+	// Milestone events
+	EventKindMilestoned   = "milestoned"
+	EventKindDemilestoned = "demilestoned"
+	
+	// Review request events
+	EventKindReviewRequested      = "review_requested"
+	EventKindReviewRequestRemoved = "review_request_removed"
+	
+	// PR state events
+	EventKindPRMerged       = "pr_merged"
+	EventKindReadyForReview = "ready_for_review"
+	EventKindConvertToDraft = "convert_to_draft"
+	EventKindClosed         = "closed"
+	EventKindReopened       = "reopened"
+	
+	// Reference events
+	EventKindMentioned       = "mentioned"
+	EventKindReferenced      = "referenced"
+	EventKindCrossReferenced = "cross-referenced"
+	
+	// Project events
+	EventKindAddedToProject        = "added_to_project"
+	EventKindMovedColumnsInProject = "moved_columns_in_project"
+	EventKindRemovedFromProject    = "removed_from_project"
+	EventKindConvertedNoteToIssue  = "converted_note_to_issue"
+	
+	// Pin events
+	EventKindPinned   = "pinned"
+	EventKindUnpinned = "unpinned"
+	
+	// Transfer events
+	EventKindTransferred = "transferred"
+	
+	// Subscription events
+	EventKindSubscribed   = "subscribed"
+	EventKindUnsubscribed = "unsubscribed"
+	
+	// Rename events
+	EventKindRenamed = "renamed"
+	
+	// Head ref events
+	EventKindHeadRefDeleted      = "head_ref_deleted"
+	EventKindHeadRefRestored     = "head_ref_restored"
+	EventKindHeadRefForcePushed  = "head_ref_force_pushed"
+	
+	// Base ref events
+	EventKindBaseRefChanged     = "base_ref_changed"
+	EventKindBaseRefForcePushed = "base_ref_force_pushed"
+	
+	// Review events
+	EventKindReviewDismissed = "review_dismissed"
+	
+	// Duplicate events
+	EventKindMarkedAsDuplicate   = "marked_as_duplicate"
+	EventKindUnmarkedAsDuplicate = "unmarked_as_duplicate"
+	
+	// Lock events
+	EventKindLocked   = "locked"
+	EventKindUnlocked = "unlocked"
+	
+	// Auto merge events
+	EventKindAutoMergeEnabled  = "auto_merge_enabled"
+	EventKindAutoMergeDisabled = "auto_merge_disabled"
+	
+	// Deploy events
+	EventKindDeploymentEnvironmentChanged = "deployment_environment_changed"
+	
+	// Connected/Disconnected events
+	EventKindConnected    = "connected"
+	EventKindDisconnected = "disconnected"
+	
+	// Comment events
+	EventKindCommentDeleted = "comment_deleted"
+	
+	// Check/Status events (not from timeline but from other APIs)
+	EventKindStatusCheck = "status_check"
+	EventKindCheckRun    = "check_run"
+)
+
 // WriteAccess constants for the Event.WriteAccess field
 const (
 	WriteAccessNo         = -2 // User confirmed to not have write access

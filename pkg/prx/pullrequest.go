@@ -32,10 +32,10 @@ type PullRequest struct {
 	ChangedFiles int `json:"changed_files"` // Number of files modified
 
 	// People & Permissions
-	AuthorBot            bool     `json:"author_bot"`                    // True if author is a bot account
-	AuthorHasWriteAccess bool     `json:"author_has_write_access"`       // True if author can merge
-	Assignees            []string `json:"assignees,omitempty"`           // Current assignees
-	RequestedReviewers   []string `json:"requested_reviewers,omitempty"` // Pending review requests
+	AuthorBot          bool     `json:"author_bot"`                    // True if author is a bot account
+	AuthorWriteAccess  int      `json:"author_write_access,omitempty"` // Author's repository permissions (-2 to 2, same as Event.WriteAccess)
+	Assignees          []string `json:"assignees,omitempty"`           // Current assignees
+	RequestedReviewers []string `json:"requested_reviewers,omitempty"` // Pending review requests
 
 	// Organization
 	Labels []string `json:"labels,omitempty"` // Applied labels

@@ -216,9 +216,7 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 
 	// Check if PR author has write access
 	if pr.User != nil {
-		writeAccess := c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-		// For AuthorHasWriteAccess bool field, treat Likely and Definitely as true
-		pullRequest.AuthorHasWriteAccess = (writeAccess > WriteAccessNA)
+		pullRequest.AuthorWriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
 	}
 
 	if !pr.ClosedAt.IsZero() {

@@ -27,7 +27,7 @@ func Example() {
 
 	// Show PR metadata
 	fmt.Printf("PR #%d: %s\n", data.PullRequest.Number, data.PullRequest.Title)
-	fmt.Printf("Author: %s (has write access: %v)\n", data.PullRequest.Author, data.PullRequest.AuthorHasWriteAccess)
+	fmt.Printf("Author: %s (write access: %d)\n", data.PullRequest.Author, data.PullRequest.AuthorWriteAccess)
 	fmt.Printf("Status: %s, Mergeable: %v\n", data.PullRequest.State, data.PullRequest.MergeableState)
 
 	// Process events
