@@ -4,102 +4,102 @@ import (
 	"time"
 )
 
-// Event kind constants
+// Event kind constants.
 const (
-	// Core events
+	// Core events.
 	EventKindCommit        = "commit"
 	EventKindComment       = "comment"
 	EventKindReview        = "review"
 	EventKindReviewComment = "review_comment"
-	
-	// Label events
+
+	// Label events.
 	EventKindLabeled   = "labeled"
 	EventKindUnlabeled = "unlabeled"
-	
-	// Assignment events
+
+	// Assignment events.
 	EventKindAssigned   = "assigned"
 	EventKindUnassigned = "unassigned"
-	
-	// Milestone events
+
+	// Milestone events.
 	EventKindMilestoned   = "milestoned"
 	EventKindDemilestoned = "demilestoned"
-	
-	// Review request events
+
+	// Review request events.
 	EventKindReviewRequested      = "review_requested"
 	EventKindReviewRequestRemoved = "review_request_removed"
-	
-	// PR state events
+
+	// PR state events.
 	EventKindPRMerged       = "pr_merged"
 	EventKindReadyForReview = "ready_for_review"
 	EventKindConvertToDraft = "convert_to_draft"
 	EventKindClosed         = "closed"
 	EventKindReopened       = "reopened"
-	
-	// Reference events
+
+	// Reference events.
 	EventKindMentioned       = "mentioned"
 	EventKindReferenced      = "referenced"
 	EventKindCrossReferenced = "cross-referenced"
-	
-	// Project events
+
+	// Project events.
 	EventKindAddedToProject        = "added_to_project"
 	EventKindMovedColumnsInProject = "moved_columns_in_project"
 	EventKindRemovedFromProject    = "removed_from_project"
 	EventKindConvertedNoteToIssue  = "converted_note_to_issue"
-	
-	// Pin events
+
+	// Pin events.
 	EventKindPinned   = "pinned"
 	EventKindUnpinned = "unpinned"
-	
-	// Transfer events
+
+	// Transfer events.
 	EventKindTransferred = "transferred"
-	
-	// Subscription events
+
+	// Subscription events.
 	EventKindSubscribed   = "subscribed"
 	EventKindUnsubscribed = "unsubscribed"
-	
-	// Rename events
+
+	// Rename events.
 	EventKindRenamed = "renamed"
-	
-	// Head ref events
-	EventKindHeadRefDeleted      = "head_ref_deleted"
-	EventKindHeadRefRestored     = "head_ref_restored"
-	EventKindHeadRefForcePushed  = "head_ref_force_pushed"
-	
-	// Base ref events
+
+	// Head ref events.
+	EventKindHeadRefDeleted     = "head_ref_deleted"
+	EventKindHeadRefRestored    = "head_ref_restored"
+	EventKindHeadRefForcePushed = "head_ref_force_pushed"
+
+	// Base ref events.
 	EventKindBaseRefChanged     = "base_ref_changed"
 	EventKindBaseRefForcePushed = "base_ref_force_pushed"
-	
-	// Review events
+
+	// Review events.
 	EventKindReviewDismissed = "review_dismissed"
-	
-	// Duplicate events
+
+	// Duplicate events.
 	EventKindMarkedAsDuplicate   = "marked_as_duplicate"
 	EventKindUnmarkedAsDuplicate = "unmarked_as_duplicate"
-	
-	// Lock events
+
+	// Lock events.
 	EventKindLocked   = "locked"
 	EventKindUnlocked = "unlocked"
-	
-	// Auto merge events
+
+	// Auto merge events.
 	EventKindAutoMergeEnabled  = "auto_merge_enabled"
 	EventKindAutoMergeDisabled = "auto_merge_disabled"
-	
-	// Deploy events
+
+	// Deploy events.
 	EventKindDeploymentEnvironmentChanged = "deployment_environment_changed"
-	
-	// Connected/Disconnected events
+
+	// Connected/Disconnected events.
 	EventKindConnected    = "connected"
 	EventKindDisconnected = "disconnected"
-	
-	// Comment events
+
+	// Comment events.
 	EventKindCommentDeleted = "comment_deleted"
-	
-	// Check/Status events (not from timeline but from other APIs)
+
+	// Check/Status events (not from timeline but from other APIs).
 	EventKindStatusCheck = "status_check"
 	EventKindCheckRun    = "check_run"
 )
 
-// WriteAccess constants for the Event.WriteAccess field
+// WriteAccess constants for the Event.WriteAccess field.
 const (
 	WriteAccessNo         = -2 // User confirmed to not have write access
 	WriteAccessUnlikely   = -1 // User unlikely to have write access (CONTRIBUTOR, NONE, etc.)
@@ -159,7 +159,7 @@ type Event struct {
 	WriteAccess int `json:"write_access,omitempty"`
 }
 
-// createEvent is a helper function to create an Event with common fields
+// createEvent is a helper function to create an Event with common fields.
 func createEvent(kind string, timestamp time.Time, user *githubUser, body string) Event {
 	body = truncate(body, 256)
 	event := Event{

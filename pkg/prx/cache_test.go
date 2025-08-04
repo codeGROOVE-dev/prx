@@ -34,21 +34,33 @@ func TestCacheClient(t *testing.T) {
 				ClosedAt:  time.Now().Add(-1 * time.Hour),
 			}
 			pr.Head.SHA = "abc123"
-			json.NewEncoder(w).Encode(pr)
+			if err := json.NewEncoder(w).Encode(pr); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		case "/repos/test/repo/pulls/1/commits":
 			commit := &githubPullRequestCommit{
 				Author: &githubUser{Login: "testuser"},
 			}
 			commit.Commit.Author.Date = time.Now().Add(-12 * time.Hour)
 			commit.Commit.Message = "Test commit"
-			json.NewEncoder(w).Encode([]*githubPullRequestCommit{commit})
+			if err := json.NewEncoder(w).Encode([]*githubPullRequestCommit{commit}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		default:
 			// Check runs endpoint expects a different format
 			if r.URL.Path == "/repos/test/repo/commits/abc123/check-runs" {
-				w.Write([]byte(`{"check_runs": []}`))
+				if _, err := w.Write([]byte(`{"check_runs": []}`)); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			} else {
 				// Return empty array for other endpoints
-				w.Write([]byte("[]"))
+				if _, err := w.Write([]byte("[]")); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 	}))

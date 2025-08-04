@@ -171,7 +171,7 @@ func filterEvents(events []Event) []Event {
 }
 
 // upgradeWriteAccess scans through events and upgrades write_access from 1 (likely) to 2 (definitely)
-// for actors who have performed actions that require write access
+// for actors who have performed actions that require write access.
 func upgradeWriteAccess(events []Event) {
 	// Track actors who have definitely demonstrated write access
 	confirmedWriteAccess := make(map[string]bool)

@@ -15,7 +15,7 @@ import (
 
 const (
 	githubAPI = "https://api.github.com"
-	// maxResponseSize limits API response size to prevent memory exhaustion
+	// maxResponseSize limits API response size to prevent memory exhaustion.
 	maxResponseSize = 10 * 1024 * 1024 // 10MB
 )
 
@@ -31,7 +31,6 @@ func (e *GitHubAPIError) Error() string {
 	return fmt.Sprintf("github API error: %s", e.Status)
 }
 
-
 // githubClient is a client for interacting with the GitHub API.
 type githubClient struct {
 	client *http.Client
@@ -44,10 +43,10 @@ func newGithubClient(client *http.Client, token string) *githubClient {
 	return &githubClient{client: client, token: token, api: githubAPI}
 }
 
-// doRequest performs the common HTTP request logic for GitHub API calls
+// doRequest performs the common HTTP request logic for GitHub API calls.
 func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *githubResponse, error) {
 	apiURL := c.api + path
-	slog.Info("GitHub API request starting", "method", "GET", "url", apiURL)
+	slog.InfoContext(ctx, "GitHub API request starting", "method", "GET", "url", apiURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
@@ -60,16 +59,20 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 	resp, err := c.client.Do(req)
 	elapsed := time.Since(start)
 	if err != nil {
-		slog.Error("GitHub API request failed", "url", apiURL, "error", err, "elapsed", elapsed)
+		slog.ErrorContext(ctx, "GitHub API request failed", "url", apiURL, "error", err, "elapsed", elapsed)
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.DebugContext(ctx, "failed to close response body", "error", closeErr, "url", apiURL)
+		}
+	}()
 
-	slog.Info("GitHub API response received", "status", resp.Status, "url", apiURL, "elapsed", elapsed)
+	slog.InfoContext(ctx, "GitHub API response received", "status", resp.Status, "url", apiURL, "elapsed", elapsed)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		slog.Error("GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
+		slog.ErrorContext(ctx, "GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
 		return nil, nil, &GitHubAPIError{
 			StatusCode: resp.StatusCode,
 			Status:     resp.Status,
