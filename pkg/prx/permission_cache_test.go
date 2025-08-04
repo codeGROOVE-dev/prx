@@ -51,8 +51,12 @@ func TestPermissionCache(t *testing.T) {
 		}
 
 		// Add some permissions
-		cache.set("owner", "repo", "user1", "admin")
-		cache.set("owner", "repo", "user2", "read")
+		if err := cache.set("owner", "repo", "user1", "admin"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := cache.set("owner", "repo", "user2", "read"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Verify file was created
 		if _, err := os.Stat(cachePath); os.IsNotExist(err) {

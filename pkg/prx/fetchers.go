@@ -34,11 +34,11 @@ func paginate[T any](ctx context.Context, c *Client, path string, process func(*
 }
 
 func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
-	c.logger.Debug("fetching commits", "owner", owner, "repo", repo, "pr", prNumber)
+	c.logger.DebugContext(ctx, "fetching commits", "owner", owner, "repo", repo, "pr", prNumber)
 
 	var events []Event
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits", owner, repo, prNumber)
-	
+
 	err := paginate(ctx, c, path, func(commit *githubPullRequestCommit) error {
 		event := Event{
 			Kind:      "commit",
@@ -56,21 +56,21 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 		events = append(events, event)
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("fetching commits: %w", err)
 	}
 
-	c.logger.Debug("fetched commits", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched commits", "count", len(events))
 	return events, nil
 }
 
 func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
-	c.logger.Debug("fetching comments", "owner", owner, "repo", repo, "pr", prNumber)
+	c.logger.DebugContext(ctx, "fetching comments", "owner", owner, "repo", repo, "pr", prNumber)
 
 	var events []Event
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, prNumber)
-	
+
 	err := paginate(ctx, c, path, func(comment *githubComment) error {
 		body := truncate(comment.Body, 256)
 		event := Event{
@@ -85,26 +85,26 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 		events = append(events, event)
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("fetching comments: %w", err)
 	}
 
-	c.logger.Debug("fetched comments", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched comments", "count", len(events))
 	return events, nil
 }
 
 func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
-	c.logger.Debug("fetching reviews", "owner", owner, "repo", repo, "pr", prNumber)
+	c.logger.DebugContext(ctx, "fetching reviews", "owner", owner, "repo", repo, "pr", prNumber)
 
 	var events []Event
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, prNumber)
-	
+
 	err := paginate(ctx, c, path, func(review *githubReview) error {
 		if review.State == "" {
 			return nil
 		}
-		
+
 		body := truncate(review.Body, 256)
 		event := Event{
 			Kind:        "review",
@@ -119,21 +119,21 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 		events = append(events, event)
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("fetching reviews: %w", err)
 	}
 
-	c.logger.Debug("fetched reviews", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched reviews", "count", len(events))
 	return events, nil
 }
 
 func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
-	c.logger.Debug("fetching review comments", "owner", owner, "repo", repo, "pr", prNumber)
+	c.logger.DebugContext(ctx, "fetching review comments", "owner", owner, "repo", repo, "pr", prNumber)
 
 	var events []Event
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments", owner, repo, prNumber)
-	
+
 	err := paginate(ctx, c, path, func(comment *githubReviewComment) error {
 		body := truncate(comment.Body, 256)
 		event := Event{
@@ -148,33 +148,33 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 		events = append(events, event)
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("fetching review comments: %w", err)
 	}
 
-	c.logger.Debug("fetched review comments", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched review comments", "count", len(events))
 	return events, nil
 }
 
 func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumber int) ([]Event, error) {
-	c.logger.Debug("fetching timeline events", "owner", owner, "repo", repo, "pr", prNumber)
+	c.logger.DebugContext(ctx, "fetching timeline events", "owner", owner, "repo", repo, "pr", prNumber)
 
 	var events []Event
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline", owner, repo, prNumber)
-	
+
 	err := paginate(ctx, c, path, func(item *githubTimelineEvent) error {
 		if event := c.parseTimelineEvent(ctx, owner, repo, item); event != nil {
 			events = append(events, *event)
 		}
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("fetching timeline events: %w", err)
 	}
 
-	c.logger.Debug("fetched timeline events", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched timeline events", "count", len(events))
 	return events, nil
 }
 
@@ -183,7 +183,7 @@ func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, ite
 		Kind:      item.Event,
 		Timestamp: item.CreatedAt,
 	}
-	
+
 	// Handle actor
 	if item.Actor != nil {
 		event.Actor = item.Actor.Login
@@ -230,12 +230,12 @@ func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, ite
 }
 
 func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]Event, error) {
-	c.logger.Debug("fetching status checks", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
+	c.logger.DebugContext(ctx, "fetching status checks", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
 
 	var events []Event
 
 	if pr.Head.SHA == "" {
-		c.logger.Debug("no SHA available for status checks")
+		c.logger.DebugContext(ctx, "no SHA available for status checks")
 		return events, nil
 	}
 
@@ -261,17 +261,17 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 		events = append(events, event)
 	}
 
-	c.logger.Debug("fetched status checks", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched status checks", "count", len(events))
 	return events, nil
 }
 
 func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]Event, error) {
-	c.logger.Debug("fetching check runs", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
+	c.logger.DebugContext(ctx, "fetching check runs", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
 
 	var events []Event
 
 	if pr.Head.SHA == "" {
-		c.logger.Debug("no SHA available for check runs")
+		c.logger.DebugContext(ctx, "no SHA available for check runs")
 		return events, nil
 	}
 
@@ -306,6 +306,6 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 		events = append(events, event)
 	}
 
-	c.logger.Debug("fetched check runs", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched check runs", "count", len(events))
 	return events, nil
 }

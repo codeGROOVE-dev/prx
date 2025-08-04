@@ -46,14 +46,14 @@ type PullRequest struct {
 	ApprovalSummary *ApprovalSummary `json:"approval_summary,omitempty"` // Review approvals summary
 }
 
-// TestSummary aggregates test results from check runs
+// TestSummary aggregates test results from check runs.
 type TestSummary struct {
 	Passing int `json:"passing"` // Tests that completed successfully
 	Failing int `json:"failing"` // Tests that failed or timed out
 	Pending int `json:"pending"` // Tests that are still running or queued
 }
 
-// StatusSummary aggregates all status checks and check runs
+// StatusSummary aggregates all status checks and check runs.
 type StatusSummary struct {
 	Success int `json:"success"` // Checks that completed successfully
 	Failure int `json:"failure"` // Checks that failed, errored, or require action
@@ -61,7 +61,7 @@ type StatusSummary struct {
 	Neutral int `json:"neutral"` // Checks that were cancelled, skipped, or neutral
 }
 
-// ApprovalSummary tracks PR review approvals and change requests
+// ApprovalSummary tracks PR review approvals and change requests.
 type ApprovalSummary struct {
 	// Approvals from users confirmed to have write access (owners, collaborators, members with confirmed access)
 	ApprovalsWithWriteAccess int `json:"approvals_with_write_access"`

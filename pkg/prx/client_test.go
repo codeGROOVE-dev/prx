@@ -22,7 +22,10 @@ func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*github
 	m.mu.Unlock()
 
 	if response, ok := m.responses[path]; ok {
-		data, _ := json.Marshal(response)
+		data, err := json.Marshal(response)
+		if err != nil {
+			return nil, err
+		}
 		return &githubResponse{NextPage: 0}, json.Unmarshal(data, v)
 	}
 
@@ -36,7 +39,10 @@ func (m *mockGithubClient) raw(ctx context.Context, path string) (json.RawMessag
 	m.mu.Unlock()
 
 	if response, ok := m.responses[path]; ok {
-		data, _ := json.Marshal(response)
+		data, err := json.Marshal(response)
+		if err != nil {
+			return nil, nil, err
+		}
 		return json.RawMessage(data), &githubResponse{NextPage: 0}, nil
 	}
 

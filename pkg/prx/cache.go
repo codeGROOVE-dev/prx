@@ -12,13 +12,14 @@ import (
 )
 
 const (
-	// cacheRetentionPeriod is how long cache files are kept before cleanup
+	// cacheRetentionPeriod is how long cache files are kept before cleanup.
 	cacheRetentionPeriod = 20 * 24 * time.Hour // 20 days
 )
 
 // CacheClient wraps the regular Client and adds disk-based caching.
 type CacheClient struct {
 	*Client
+
 	cacheDir string
 }
 
@@ -62,7 +63,7 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 
 // PullRequest fetches a pull request with all its events and metadata, with caching support.
 func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
-	c.logger.Info("fetching pull request with cache",
+	c.logger.InfoContext(ctx, "fetching pull request with cache",
 		"owner", owner,
 		"repo", repo,
 		"pr", prNumber,
@@ -128,49 +129,49 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 		err    error
 		name   string
 	}
-	
+
 	results := make(chan result, 7)
-	
+
 	go func() {
 		e, err := c.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
 		results <- result{e, err, "commits"}
 	}()
-	
+
 	go func() {
 		e, err := c.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
 		results <- result{e, err, "comments"}
 	}()
-	
+
 	go func() {
 		e, err := c.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
 		results <- result{e, err, "reviews"}
 	}()
-	
+
 	go func() {
 		e, err := c.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
 		results <- result{e, err, "review comments"}
 	}()
-	
+
 	go func() {
 		e, err := c.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
 		results <- result{e, err, "timeline events"}
 	}()
-	
+
 	go func() {
 		e, err := c.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt)
 		results <- result{e, err, "status checks"}
 	}()
-	
+
 	go func() {
 		e, err := c.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt)
 		results <- result{e, err, "check runs"}
 	}()
-	
+
 	// Collect results
 	for i := 0; i < 7; i++ {
 		r := <-results
 		if r.err != nil {
-			c.logger.Error("failed to fetch "+r.name, "error", r.err)
+			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
 			errors = append(errors, r.err)
 		} else {
 			events = append(events, r.events...)
@@ -212,7 +213,7 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
 	upgradeWriteAccess(events)
 
-	c.logger.Info("successfully fetched pull request with cache",
+	c.logger.InfoContext(ctx, "successfully fetched pull request with cache",
 		"owner", owner,
 		"repo", repo,
 		"pr", prNumber,
@@ -235,9 +236,9 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 		if cached.CachedAt.After(referenceTime) || cached.CachedAt.Equal(referenceTime) {
 			var pr githubPullRequest
 			if err := json.Unmarshal(cached.Data, &pr); err != nil {
-				c.logger.Warn("failed to unmarshal cached pull request", "error", err)
+				c.logger.WarnContext(ctx, "failed to unmarshal cached pull request", "error", err)
 			} else {
-				c.logger.Info("cache hit: pull request",
+				c.logger.InfoContext(ctx, "cache hit: pull request",
 					"owner", owner,
 					"repo", repo,
 					"pr", prNumber,
@@ -245,21 +246,21 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 				return &pr, nil
 			}
 		}
-		c.logger.Info("cache miss: pull request expired",
+		c.logger.InfoContext(ctx, "cache miss: pull request expired",
 			"owner", owner,
 			"repo", repo,
 			"pr", prNumber,
 			"cached_at", cached.CachedAt,
 			"reference_time", referenceTime)
 	} else {
-		c.logger.Info("cache miss: pull request not in cache",
+		c.logger.InfoContext(ctx, "cache miss: pull request not in cache",
 			"owner", owner,
 			"repo", repo,
 			"pr", prNumber)
 	}
 
 	// Fetch from API
-	c.logger.Info("fetching pull request from GitHub API",
+	c.logger.InfoContext(ctx, "fetching pull request from GitHub API",
 		"owner", owner,
 		"repo", repo,
 		"pr", prNumber)
@@ -280,7 +281,7 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 		UpdatedAt: pr.UpdatedAt,
 	}
 	if err := c.saveCache(cacheKey, cached); err != nil {
-		c.logger.Warn("failed to save pull request to cache", "error", err)
+		c.logger.WarnContext(ctx, "failed to save pull request to cache", "error", err)
 	}
 
 	return &pr, nil
@@ -293,16 +294,16 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 	var cached cacheEntry
 	if c.loadCache(cacheKey, &cached) {
 		if cached.UpdatedAt.After(referenceTime) || cached.UpdatedAt.Equal(referenceTime) {
-			c.logger.Info("cache hit", "type", dataType, "path", path, "cached_at", cached.CachedAt)
+			c.logger.InfoContext(ctx, "cache hit", "type", dataType, "path", path, "cached_at", cached.CachedAt)
 			return cached.Data, nil
 		}
-		c.logger.Info("cache miss: "+dataType+" expired", "cached_at", cached.UpdatedAt, "reference_time", referenceTime)
+		c.logger.InfoContext(ctx, "cache miss: "+dataType+" expired", "cached_at", cached.UpdatedAt, "reference_time", referenceTime)
 	} else {
-		c.logger.Info("cache miss: "+dataType+" not found", "type", dataType, "path", path)
+		c.logger.InfoContext(ctx, "cache miss: "+dataType+" not found", "type", dataType, "path", path)
 	}
 
 	// Fetch from API
-	c.logger.Info("fetching from GitHub API", "type", dataType, "path", path)
+	c.logger.InfoContext(ctx, "fetching from GitHub API", "type", dataType, "path", path)
 	rawData, _, err := c.github.raw(ctx, path)
 	if err != nil {
 		return nil, err
@@ -314,7 +315,7 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 		CachedAt:  time.Now(),
 	}
 	if err := c.saveCache(cacheKey, cached); err != nil {
-		c.logger.Warn("failed to save to cache", "type", dataType, "error", err)
+		c.logger.WarnContext(ctx, "failed to save to cache", "type", dataType, "error", err)
 	}
 
 	return rawData, nil
@@ -423,7 +424,7 @@ func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prN
 
 		for _, review := range reviews {
 			if review.State != "" {
-				c.logger.Info("processing review",
+				c.logger.InfoContext(ctx, "processing review",
 					"reviewer", review.User.Login,
 					"author_association", review.AuthorAssociation,
 					"state", review.State)
@@ -685,14 +686,18 @@ func (c *CacheClient) loadCache(key string, v any) bool {
 	file, err := os.Open(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			c.logger.Debug("failed to open cache file", "error", err, "path", path)
+			c.logger.DebugContext(context.Background(), "failed to open cache file", "error", err, "path", path)
 		}
 		return false
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			c.logger.DebugContext(context.Background(), "failed to close cache file", "error", closeErr, "path", path)
+		}
+	}()
 
 	if err := json.NewDecoder(file).Decode(v); err != nil {
-		c.logger.Warn("failed to decode cache file", "error", err, "path", path)
+		c.logger.WarnContext(context.Background(), "failed to decode cache file", "error", err, "path", path)
 		return false
 	}
 
@@ -711,18 +716,26 @@ func (c *CacheClient) saveCache(key string, v any) error {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(v); err != nil {
-		file.Close()
-		os.Remove(tmpPath)
+		if closeErr := file.Close(); closeErr != nil {
+			c.logger.DebugContext(context.Background(), "failed to close temp file", "error", closeErr, "path", tmpPath)
+		}
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			c.logger.DebugContext(context.Background(), "failed to remove temp file", "error", removeErr, "path", tmpPath)
+		}
 		return fmt.Errorf("encoding cache data: %w", err)
 	}
 
 	if err := file.Close(); err != nil {
-		os.Remove(tmpPath)
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			c.logger.DebugContext(context.Background(), "failed to remove temp file", "error", removeErr, "path", tmpPath)
+		}
 		return fmt.Errorf("closing cache file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			c.logger.DebugContext(context.Background(), "failed to remove temp file", "error", removeErr, "path", tmpPath)
+		}
 		return fmt.Errorf("renaming cache file: %w", err)
 	}
 
@@ -730,11 +743,11 @@ func (c *CacheClient) saveCache(key string, v any) error {
 }
 
 func (c *CacheClient) cleanOldCaches() {
-	c.logger.Debug("cleaning old cache files")
+	c.logger.DebugContext(context.Background(), "cleaning old cache files")
 
 	entries, err := os.ReadDir(c.cacheDir)
 	if err != nil {
-		c.logger.Error("failed to read cache directory", "error", err)
+		c.logger.ErrorContext(context.Background(), "failed to read cache directory", "error", err)
 		return
 	}
 
@@ -754,7 +767,7 @@ func (c *CacheClient) cleanOldCaches() {
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(c.cacheDir, entry.Name())
 			if err := os.Remove(path); err != nil {
-				c.logger.Warn("failed to remove old cache file", "path", path, "error", err)
+				c.logger.WarnContext(context.Background(), "failed to remove old cache file", "path", path, "error", err)
 			} else {
 				removed++
 			}
@@ -762,6 +775,6 @@ func (c *CacheClient) cleanOldCaches() {
 	}
 
 	if removed > 0 {
-		c.logger.Info("cleaned old cache files", "removed", removed)
+		c.logger.InfoContext(context.Background(), "cleaned old cache files", "removed", removed)
 	}
 }

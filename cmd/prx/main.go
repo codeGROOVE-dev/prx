@@ -22,7 +22,7 @@ func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	noCache := flag.Bool("no-cache", false, "Disable caching")
 	flag.Parse()
-	
+
 	if *debug {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
@@ -39,17 +39,20 @@ func main() {
 
 	owner, repo, prNumber, err := parsePRURL(prURL)
 	if err != nil {
-		log.Fatalf("Invalid PR URL: %v", err)
+		log.Printf("Invalid PR URL: %v", err)
+		os.Exit(1)
 	}
 
 	token, err := githubToken()
 	if err != nil {
-		log.Fatalf("Failed to get GitHub token: %v", err)
+		log.Printf("Failed to get GitHub token: %v", err)
+		os.Exit(1)
 	}
 
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
-		log.Fatalf("Failed to get user cache directory: %v", err)
+		log.Printf("Failed to get user cache directory: %v", err)
+		os.Exit(1)
 	}
 
 	cacheDir := filepath.Join(userCacheDir, "prx")
@@ -58,7 +61,7 @@ func main() {
 	if *debug {
 		opts = append(opts, prx.WithLogger(slog.Default()))
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -67,27 +70,31 @@ func main() {
 		client := prx.NewClient(token, opts...)
 		data, err = client.PullRequest(ctx, owner, repo, prNumber)
 		if err != nil {
-			log.Fatalf("Failed to fetch PR data: %v", err)
+			log.Printf("Failed to fetch PR data: %v", err)
+			os.Exit(1)
 		}
 	} else {
 		client, err := prx.NewCacheClient(token, cacheDir, opts...)
 		if err != nil {
-			log.Fatalf("Failed to create cache client: %v", err)
+			log.Printf("Failed to create cache client: %v", err)
+			os.Exit(1)
 		}
 		data, err = client.PullRequest(ctx, owner, repo, prNumber, time.Now())
 		if err != nil {
-			log.Fatalf("Failed to fetch PR data: %v", err)
+			log.Printf("Failed to fetch PR data: %v", err)
+			os.Exit(1)
 		}
 	}
 
 	encoder := json.NewEncoder(os.Stdout)
 	if err := encoder.Encode(data); err != nil {
-		log.Fatalf("Failed to encode pull request: %v", err)
+		log.Printf("Failed to encode pull request: %v", err)
+		os.Exit(1)
 	}
 }
 
 func githubToken() (string, error) {
-	cmd := exec.Command("gh", "auth", "token")
+	cmd := exec.CommandContext(context.Background(), "gh", "auth", "token")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to run 'gh auth token': %w", err)

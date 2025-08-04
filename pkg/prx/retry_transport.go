@@ -2,24 +2,25 @@ package prx
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/codeGROOVE-dev/retry-go"
+	"github.com/codeGROOVE-dev/retry"
 )
 
 const (
-	// retryAttempts is the maximum number of retry attempts
+	// retryAttempts is the maximum number of retry attempts.
 	retryAttempts = 10
-	// retryDelay is the initial retry delay
+	// retryDelay is the initial retry delay.
 	retryDelay = 1 * time.Second
-	// retryMaxDelay is the maximum retry delay
+	// retryMaxDelay is the maximum retry delay.
 	retryMaxDelay = 2 * time.Minute
-	// retryMaxJitter adds randomness to prevent thundering herd
+	// retryMaxJitter adds randomness to prevent thundering herd.
 	retryMaxJitter = 1 * time.Second
-	// maxRequestSize limits request body size to prevent memory issues
+	// maxRequestSize limits request body size to prevent memory issues.
 	maxRequestSize = 1 * 1024 * 1024 // 1MB - reasonable for API requests
 )
 
@@ -35,7 +36,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Log the outgoing request
-	slog.Info("HTTP request starting",
+	slog.InfoContext(req.Context(), "HTTP request starting",
 		"method", req.Method,
 		"url", req.URL.String(),
 		"host", req.URL.Host)
@@ -47,7 +48,9 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
 		}
-		req.Body.Close()
+		if closeErr := req.Body.Close(); closeErr != nil {
+			slog.DebugContext(req.Context(), "failed to close request body", "error", closeErr, "url", req.URL.String())
+		}
 	}
 
 	var resp *http.Response
@@ -65,7 +68,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			resp, err = t.Base.RoundTrip(req)
 			elapsed := time.Since(start)
 			if err != nil {
-				slog.Error("HTTP request failed",
+				slog.ErrorContext(req.Context(), "HTTP request failed",
 					"url", req.URL.String(),
 					"error", err,
 					"elapsed", elapsed)
@@ -73,7 +76,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				return err
 			}
 
-			slog.Info("HTTP response received",
+			slog.InfoContext(req.Context(), "HTTP response received",
 				"status", resp.StatusCode,
 				"url", req.URL.String(),
 				"elapsed", elapsed)
@@ -81,9 +84,11 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// Retry on 429 (rate limit) or 5xx server errors
 			if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
 				bodyBytes, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					slog.DebugContext(req.Context(), "failed to close response body for retry", "error", closeErr)
+				}
 				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				slog.Info("HTTP request will be retried",
+				slog.InfoContext(req.Context(), "HTTP request will be retried",
 					"status", resp.StatusCode,
 					"url", req.URL.String(),
 					"reason", "retryable status code")
@@ -100,11 +105,19 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(retryMaxJitter),
 		retry.RetryIf(func(err error) bool {
-			_, ok := err.(*retryableError)
-			return ok
+			var retryErr *retryableError
+			if errors.As(err, &retryErr) {
+				return true
+			}
+			// For any other error, ensure the response body is closed if it exists
+			if resp != nil && resp.Body != nil {
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					slog.DebugContext(req.Context(), "failed to close response body on error", "error", closeErr)
+				}
+			}
+			return false
 		}),
 	)
-
 	if err != nil {
 		if lastErr != nil {
 			return resp, lastErr
@@ -123,4 +136,3 @@ type retryableError struct {
 func (e *retryableError) Error() string {
 	return http.StatusText(e.StatusCode)
 }
-
