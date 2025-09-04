@@ -16,19 +16,19 @@ const (
 
 // permissionCache caches user repository permissions both in memory and on disk.
 type permissionCache struct {
-	mu       sync.RWMutex
 	memory   map[string]permissionEntry
 	diskPath string
+	mu       sync.RWMutex
 }
 
 // permissionEntry represents a cached permission.
 type permissionEntry struct {
-	Permission string    `json:"permission"`
 	CachedAt   time.Time `json:"cached_at"`
+	Permission string    `json:"permission"`
 }
 
 // newPermissionCache creates a new permission cache.
-func newPermissionCache(cacheDir string) (*permissionCache, error) {
+func newPermissionCache(cacheDir string) *permissionCache {
 	pc := &permissionCache{
 		memory:   make(map[string]permissionEntry),
 		diskPath: filepath.Join(cacheDir, permissionCacheFile),
@@ -41,7 +41,7 @@ func newPermissionCache(cacheDir string) (*permissionCache, error) {
 		_ = err
 	}
 
-	return pc, nil
+	return pc
 }
 
 // get retrieves a cached permission if it exists and is not expired.
@@ -134,7 +134,7 @@ func (pc *permissionCache) saveToDisk() error {
 
 	// Write to temp file first, then rename for atomicity
 	tempFile := pc.diskPath + ".tmp"
-	if err := os.WriteFile(tempFile, data, 0600); err != nil {
+	if err := os.WriteFile(tempFile, data, 0o600); err != nil {
 		return fmt.Errorf("writing permission cache: %w", err)
 	}
 
@@ -143,18 +143,4 @@ func (pc *permissionCache) saveToDisk() error {
 	}
 
 	return nil
-}
-
-// cleanup removes expired entries from memory and disk.
-func (pc *permissionCache) cleanup() error {
-	pc.mu.Lock()
-	for key, entry := range pc.memory {
-		if time.Since(entry.CachedAt) > permissionCacheDuration {
-			delete(pc.memory, key)
-		}
-	}
-	pc.mu.Unlock()
-
-	// Save to disk after releasing the lock
-	return pc.saveToDisk()
 }

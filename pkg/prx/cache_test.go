@@ -161,7 +161,7 @@ func TestCacheCleanup(t *testing.T) {
 
 	// Create old cache file
 	oldFile := filepath.Join(cacheDir, "old.json")
-	if err := os.WriteFile(oldFile, []byte("{}"), 0600); err != nil {
+	if err := os.WriteFile(oldFile, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("Failed to create old file: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestCacheCleanup(t *testing.T) {
 
 	// Create recent cache file
 	recentFile := filepath.Join(cacheDir, "recent.json")
-	if err := os.WriteFile(recentFile, []byte("{}"), 0600); err != nil {
+	if err := os.WriteFile(recentFile, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("Failed to create recent file: %v", err)
 	}
 

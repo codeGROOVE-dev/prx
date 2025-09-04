@@ -17,14 +17,16 @@ const (
 	githubAPI = "https://api.github.com"
 	// maxResponseSize limits API response size to prevent memory exhaustion.
 	maxResponseSize = 10 * 1024 * 1024 // 10MB
+	// maxErrorBodySize limits error response body reading for debugging.
+	maxErrorBodySize = 1024
 )
 
 // GitHubAPIError represents an error response from the GitHub API.
 type GitHubAPIError struct {
-	StatusCode int
 	Status     string
 	Body       string
 	URL        string
+	StatusCode int
 }
 
 func (e *GitHubAPIError) Error() string {
@@ -38,17 +40,12 @@ type githubClient struct {
 	api    string
 }
 
-// newGithubClient creates a new githubClient.
-func newGithubClient(client *http.Client, token string) *githubClient {
-	return &githubClient{client: client, token: token, api: githubAPI}
-}
-
 // doRequest performs the common HTTP request logic for GitHub API calls.
 func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *githubResponse, error) {
 	apiURL := c.api + path
 	slog.InfoContext(ctx, "GitHub API request starting", "method", "GET", "url", apiURL)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -71,7 +68,10 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 	slog.InfoContext(ctx, "GitHub API response received", "status", resp.Status, "url", apiURL, "elapsed", elapsed)
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+		if readErr != nil {
+			body = []byte("failed to read response body")
+		}
 		slog.ErrorContext(ctx, "GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
 		return nil, nil, &GitHubAPIError{
 			StatusCode: resp.StatusCode,
@@ -96,7 +96,10 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 			u, err := url.Parse(strings.Trim(parts[0], "<>"))
 			if err == nil {
 				page := u.Query().Get("page")
-				nextPageNum, _ = strconv.Atoi(page)
+				nextPageNum, err = strconv.Atoi(page)
+				if err != nil {
+					nextPageNum = 0
+				}
 			}
 			break
 		}
@@ -244,37 +247,37 @@ type githubCheckRuns struct {
 
 // githubPullRequest represents a GitHub pull request.
 type githubPullRequest struct {
-	Number    int         `json:"number"`
-	Title     string      `json:"title"`
-	Body      string      `json:"body"`
-	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
-	User      *githubUser `json:"user"`
-	Merged    bool        `json:"merged"`
-	MergedAt  time.Time   `json:"merged_at"`
-	MergedBy  *githubUser `json:"merged_by"`
-	State     string      `json:"state"`
 	ClosedAt  time.Time   `json:"closed_at"`
+	MergedAt  time.Time   `json:"merged_at"`
+	CreatedAt time.Time   `json:"created_at"`
+	MergedBy  *githubUser `json:"merged_by"`
+	User      *githubUser `json:"user"`
+	Mergeable *bool       `json:"mergeable"`
 	Head      struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
 	} `json:"head"`
-	Base struct {
+	Body  string `json:"body"`
+	State string `json:"state"`
+	Title string `json:"title"`
+	Base  struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
-	AuthorAssociation  string        `json:"author_association"`
-	Mergeable          *bool         `json:"mergeable"`           // Can be true, false, or null
-	MergeableState     string        `json:"mergeable_state"`     // "clean", "dirty", "blocked", "unstable", "unknown"
-	Draft              bool          `json:"draft"`               // Whether the PR is a draft
-	Additions          int           `json:"additions"`           // Lines added
-	Deletions          int           `json:"deletions"`           // Lines removed
-	ChangedFiles       int           `json:"changed_files"`       // Number of files changed
-	Commits            int           `json:"commits"`             // Number of commits
-	ReviewComments     int           `json:"review_comments"`     // Number of review comments
-	Comments           int           `json:"comments"`            // Number of issue comments
-	Assignees          []*githubUser `json:"assignees"`           // Current assignees
-	RequestedReviewers []*githubUser `json:"requested_reviewers"` // Pending reviewers
-	Labels             []struct {
+	AuthorAssociation string `json:"author_association"`
+	MergeableState    string `json:"mergeable_state"`
+	Labels            []struct {
 		Name string `json:"name"`
-	} `json:"labels"` // PR labels
+	} `json:"labels"`
+	Assignees          []*githubUser `json:"assignees"`
+	RequestedReviewers []*githubUser `json:"requested_reviewers"`
+	Deletions          int           `json:"deletions"`
+	Number             int           `json:"number"`
+	ChangedFiles       int           `json:"changed_files"`
+	Commits            int           `json:"commits"`
+	ReviewComments     int           `json:"review_comments"`
+	Comments           int           `json:"comments"`
+	Additions          int           `json:"additions"`
+	Draft              bool          `json:"draft"`
+	Merged             bool          `json:"merged"`
 }

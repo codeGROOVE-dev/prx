@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+const (
+	// maxTruncateLength is the default truncation length for text fields.
+	maxTruncateLength = 256
+)
+
 var questionPatterns = []string{
 	"how can",
 	"how do",
@@ -54,20 +59,50 @@ func sortEventsByTimestamp(events []Event) {
 }
 
 func isHexString(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
 		}
+		return false
 	}
 	return true
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+func truncate(s string) string {
+	if len(s) <= maxTruncateLength {
 		return s
 	}
-	return s[:maxLen]
+	return s[:maxTruncateLength]
+}
+
+// buildPullRequest converts a githubPullRequest to our internal PullRequest struct.
+func buildPullRequest(pr *githubPullRequest) PullRequest {
+	result := PullRequest{
+		Number:         pr.Number,
+		Title:          pr.Title,
+		Body:           truncate(pr.Body),
+		State:          pr.State,
+		Draft:          pr.Draft,
+		Merged:         pr.Merged,
+		Mergeable:      pr.Mergeable,
+		MergeableState: pr.MergeableState,
+		CreatedAt:      pr.CreatedAt,
+		UpdatedAt:      pr.UpdatedAt,
+		Additions:      pr.Additions,
+		Deletions:      pr.Deletions,
+		ChangedFiles:   pr.ChangedFiles,
+	}
+
+	if pr.User != nil {
+		result.Author = pr.User.Login
+		result.AuthorBot = isBot(pr.User)
+	} else {
+		result.Author = "unknown"
+		result.AuthorBot = false
+	}
+
+	return result
 }
 
 func calculateTestSummary(events []Event) *TestSummary {
@@ -88,6 +123,8 @@ func calculateTestSummary(events []Event) *TestSummary {
 			summary.Failing++
 		case "", "neutral", "cancelled", "skipped", "stale", "queued", "in_progress", "pending":
 			summary.Pending++
+		default:
+			// Unknown outcome, ignore
 		}
 	}
 
@@ -100,7 +137,7 @@ func calculateStatusSummary(events []Event) *StatusSummary {
 
 	for _, event := range events {
 		if (event.Kind == "status_check" || event.Kind == "check_run") && event.Body != "" {
-			key := string(event.Kind) + ":" + event.Body
+			key := event.Kind + ":" + event.Body
 			checkStates[key] = event.Outcome
 		}
 	}
@@ -115,6 +152,8 @@ func calculateStatusSummary(events []Event) *StatusSummary {
 			summary.Pending++
 		case "neutral", "cancelled", "skipped", "stale":
 			summary.Neutral++
+		default:
+			// Unknown outcome, ignore
 		}
 	}
 
@@ -145,6 +184,8 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 			}
 		case "changes_requested":
 			summary.ChangesRequested++
+		default:
+			// Ignore other review states like "commented"
 		}
 	}
 
@@ -184,6 +225,8 @@ func upgradeWriteAccess(events []Event) {
 			if event.Actor != "" {
 				confirmedWriteAccess[event.Actor] = true
 			}
+		default:
+			// Other event types don't require write access
 		}
 	}
 
