@@ -3,10 +3,14 @@ package prx
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
-const maxPerPage = 100
+const (
+	maxPerPage = 100
+	countField = "count"
+)
 
 // paginate fetches all pages of results from a GitHub API endpoint.
 // The fetch function should unmarshal the response and return the next page number.
@@ -61,7 +65,7 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 		return nil, fmt.Errorf("fetching commits: %w", err)
 	}
 
-	c.logger.DebugContext(ctx, "fetched commits", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched commits", countField, len(events))
 	return events, nil
 }
 
@@ -89,7 +93,7 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 		return nil, fmt.Errorf("fetching comments: %w", err)
 	}
 
-	c.logger.DebugContext(ctx, "fetched comments", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched comments", countField, len(events))
 	return events, nil
 }
 
@@ -122,7 +126,7 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 		return nil, fmt.Errorf("fetching reviews: %w", err)
 	}
 
-	c.logger.DebugContext(ctx, "fetched reviews", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched reviews", countField, len(events))
 	return events, nil
 }
 
@@ -150,7 +154,7 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 		return nil, fmt.Errorf("fetching review comments: %w", err)
 	}
 
-	c.logger.DebugContext(ctx, "fetched review comments", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched review comments", countField, len(events))
 	return events, nil
 }
 
@@ -170,7 +174,7 @@ func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumbe
 		return nil, fmt.Errorf("fetching timeline events: %w", err)
 	}
 
-	c.logger.DebugContext(ctx, "fetched timeline events", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched timeline events", countField, len(events))
 	return events, nil
 }
 
@@ -228,7 +232,7 @@ func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, ite
 	return event
 }
 
-func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]Event, error) {
+func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest, _ []string) ([]Event, error) {
 	c.logger.DebugContext(ctx, "fetching status checks", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
 
 	var events []Event
@@ -260,11 +264,11 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 		events = append(events, event)
 	}
 
-	c.logger.DebugContext(ctx, "fetched status checks", "count", len(events))
+	c.logger.DebugContext(ctx, "fetched status checks", countField, len(events))
 	return events, nil
 }
 
-func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]Event, string, error) {
+func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPullRequest, _ []string) ([]Event, string, error) {
 	c.logger.DebugContext(ctx, "fetching check runs", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
 
 	var events []Event
@@ -354,6 +358,251 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 		testState = TestStateNone
 	}
 
-	c.logger.DebugContext(ctx, "fetched check runs", "count", len(events), "test_state", testState)
+	c.logger.DebugContext(ctx, "fetched check runs", countField, len(events), "test_state", testState)
 	return events, testState, nil
+}
+
+func (c *Client) requiredStatusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest) []string {
+	c.logger.InfoContext(ctx, "fetching required status checks", "owner", owner, "repo", repo, "base_branch", pr.Base.Ref)
+
+	var allRequired []string
+
+	// Try the combined status API first - this should show what GitHub considers required
+	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status", owner, repo, pr.Head.SHA)
+	var combinedStatus githubCombinedStatus
+	_, err := c.github.get(ctx, statusPath, &combinedStatus)
+	if err == nil {
+		c.logger.InfoContext(ctx, "fetched combined status", "state", combinedStatus.State, "total_count", combinedStatus.TotalCount)
+		// Log what contexts are available in the combined status
+		var contexts []string
+		for _, status := range combinedStatus.Statuses {
+			contexts = append(contexts, status.Context)
+		}
+		c.logger.InfoContext(ctx, "combined status contexts found", "contexts", contexts)
+	} else {
+		c.logger.InfoContext(ctx, "failed to get combined status", "error", err)
+	}
+
+	// Try branch protection rules - this is the authoritative source
+	protectionPath := fmt.Sprintf("/repos/%s/%s/branches/%s/protection", owner, repo, pr.Base.Ref)
+	var protection githubBranchProtection
+	_, err = c.github.get(ctx, protectionPath, &protection)
+	if err == nil {
+		c.logger.InfoContext(ctx, "found branch protection", "required_status_checks_enabled", protection.RequiredStatusChecks != nil)
+		if protection.RequiredStatusChecks != nil {
+			// Add contexts from legacy format
+			c.logger.InfoContext(ctx, "branch protection legacy contexts", "contexts", protection.RequiredStatusChecks.Contexts)
+			allRequired = append(allRequired, protection.RequiredStatusChecks.Contexts...)
+
+			// Add contexts from newer checks format
+			var checkContexts []string
+			for _, check := range protection.RequiredStatusChecks.Checks {
+				checkContexts = append(checkContexts, check.Context)
+				allRequired = append(allRequired, check.Context)
+			}
+			c.logger.InfoContext(ctx, "branch protection newer checks format", "contexts", checkContexts)
+			c.logger.InfoContext(ctx, "found required status checks from branch protection", countField, len(allRequired), "checks", allRequired)
+		}
+	} else {
+		c.logger.InfoContext(ctx, "branch protection endpoint failed", "error", err)
+		// Fallback to the specific required_status_checks endpoint
+		checksPath := fmt.Sprintf("/repos/%s/%s/branches/%s/protection/required_status_checks", owner, repo, pr.Base.Ref)
+		var checks githubRequiredStatusChecks
+		_, err = c.github.get(ctx, checksPath, &checks)
+		if err == nil {
+			// Add contexts from legacy format
+			c.logger.InfoContext(ctx, "specific endpoint legacy contexts", "contexts", checks.Contexts)
+			allRequired = append(allRequired, checks.Contexts...)
+
+			// Add contexts from newer checks format
+			var checkContexts []string
+			for _, check := range checks.Checks {
+				checkContexts = append(checkContexts, check.Context)
+				allRequired = append(allRequired, check.Context)
+			}
+			c.logger.InfoContext(ctx, "specific endpoint newer checks format", "contexts", checkContexts)
+			c.logger.InfoContext(ctx, "found required status checks from specific endpoint", countField, len(allRequired), "checks", allRequired)
+		} else {
+			c.logger.InfoContext(ctx, "no branch protection status checks found", "error", err)
+		}
+	}
+
+	// Try repository rulesets (newer approach)
+	rulesetPath := fmt.Sprintf("/repos/%s/%s/rulesets", owner, repo)
+	var rulesets []githubRuleset
+	_, err = c.github.get(ctx, rulesetPath, &rulesets)
+	if err == nil {
+		c.logger.InfoContext(ctx, "fetched rulesets successfully", countField, len(rulesets))
+		for i, ruleset := range rulesets {
+			c.logger.InfoContext(ctx, "examining ruleset",
+				"index", i,
+				"id", ruleset.ID,
+				"name", ruleset.Name,
+				"target", ruleset.Target,
+				"rules", len(ruleset.Rules),
+			)
+			if ruleset.Target == "branch" {
+				for j, rule := range ruleset.Rules {
+					c.logger.InfoContext(ctx, "examining rule", "ruleset", i, "rule", j, "type", rule.Type)
+					if rule.Type == "required_status_checks" && rule.Parameters.RequiredStatusChecks != nil {
+						c.logger.InfoContext(ctx, "found required status checks rule", "checks", len(rule.Parameters.RequiredStatusChecks))
+						for _, check := range rule.Parameters.RequiredStatusChecks {
+							c.logger.InfoContext(ctx, "adding required check from ruleset", "context", check.Context)
+							allRequired = append(allRequired, check.Context)
+						}
+					}
+				}
+			}
+		}
+		c.logger.InfoContext(ctx, "found required status checks from rulesets", "additional_from_rulesets", len(allRequired))
+	} else {
+		c.logger.InfoContext(ctx, "no rulesets found", "error", err)
+	}
+
+	// Check for expected GitHub Actions workflows that should run on this PR
+	// But only add them as required if the PR is actually blocked due to missing checks
+	if pr.MergeableState == "blocked" {
+		expectedFromWorkflows, err := c.getExpectedWorkflowChecks(ctx, owner, repo, pr)
+		if err != nil {
+			c.logger.WarnContext(ctx, "failed to get expected workflow checks", "error", err)
+		} else {
+			c.logger.InfoContext(ctx,
+				"found expected workflow checks but not treating as required",
+				countField, len(expectedFromWorkflows),
+				"checks", expectedFromWorkflows,
+				"reason", "explicit_requirements_exist_or_pr_not_blocked",
+			)
+			// any explicit required checks from branch protection or rulesets
+			if len(allRequired) == 0 && len(expectedFromWorkflows) > 0 {
+				allRequired = append(allRequired, expectedFromWorkflows...)
+				c.logger.InfoContext(ctx,
+					"PR is blocked with no explicit required checks - treating expected workflows as required",
+					countField, len(expectedFromWorkflows),
+					"checks", expectedFromWorkflows,
+				)
+			} else {
+				c.logger.InfoContext(ctx,
+					"found expected workflow checks but not treating as required",
+					countField, len(expectedFromWorkflows),
+					"checks", expectedFromWorkflows,
+					"reason", "explicit_requirements_exist_or_pr_not_blocked",
+				)
+			}
+		}
+	}
+
+	// If we haven't found any required checks but the PR is blocked due to checks,
+	// there might be organization-level or merge queue requirements we can't see
+	if len(allRequired) == 0 {
+		c.logger.InfoContext(ctx, "no required status checks found from any source, checking PR state", "mergeable_state", pr.MergeableState)
+
+		// If the PR is blocked and we know checks are required (based on mergeable_state),
+		// we could potentially infer missing checks, but for now we'll just log this scenario
+		if pr.MergeableState == "blocked" {
+			c.logger.InfoContext(ctx, "PR is blocked - there may be required checks not visible via API")
+		}
+		return nil
+	}
+
+	c.logger.InfoContext(ctx, "total required status checks found", countField, len(allRequired), "checks", allRequired)
+	return allRequired
+}
+
+func (c *Client) getExpectedWorkflowChecks(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]string, error) {
+	c.logger.InfoContext(ctx, "checking for expected workflow checks", "owner", owner, "repo", repo, "head_sha", pr.Head.SHA)
+
+	// Get all workflows in the repository
+	workflowPath := fmt.Sprintf("/repos/%s/%s/actions/workflows", owner, repo)
+	var workflows githubWorkflows
+	_, err := c.github.get(ctx, workflowPath, &workflows)
+	if err != nil {
+		return nil, fmt.Errorf("fetching workflows: %w", err)
+	}
+
+	c.logger.InfoContext(ctx, "found workflows", countField, len(workflows.Workflows))
+
+	// Get workflow runs for this specific commit to see which workflows should have run
+	runsPath := fmt.Sprintf("/repos/%s/%s/actions/runs?head_sha=%s", owner, repo, pr.Head.SHA)
+	var runs githubWorkflowRuns
+	_, err = c.github.get(ctx, runsPath, &runs)
+	if err != nil {
+		c.logger.WarnContext(ctx, "failed to get workflow runs for commit", "error", err, "head_sha", pr.Head.SHA)
+		// Continue without workflow run data - we'll try to infer from workflow names
+	}
+
+	c.logger.InfoContext(ctx, "found workflow runs for commit", countField, len(runs.WorkflowRuns), "head_sha", pr.Head.SHA)
+
+	var expectedChecks []string
+
+	// Look for workflows that should have run but either didn't run or are expected to create checks
+	workflowRunsByName := make(map[string]githubWorkflowRun)
+	for _, run := range runs.WorkflowRuns {
+		workflowRunsByName[run.Name] = run
+	}
+
+	for _, workflow := range workflows.Workflows {
+		if workflow.State != "active" {
+			continue // Skip disabled workflows
+		}
+
+		c.logger.InfoContext(ctx, "examining workflow", "name", workflow.Name, "path", workflow.Path, "state", workflow.State)
+
+		// Check if this workflow has a run for our commit
+		if run, exists := workflowRunsByName[workflow.Name]; exists {
+			c.logger.InfoContext(ctx, "workflow has run", "name", workflow.Name, "status", run.Status, "conclusion", run.Conclusion)
+			// If workflow is still running, it should create checks
+			if run.Status == "queued" || run.Status == "in_progress" || run.Status == "waiting" {
+				expectedChecks = append(expectedChecks, workflow.Name)
+				c.logger.InfoContext(ctx, "adding pending workflow as expected check", "name", workflow.Name, "status", run.Status)
+			} else if run.Status == "completed" && c.isWorkflowExpectedForPR(workflow.Name) {
+				// If workflow completed and looks like a required CI workflow, consider it as required
+				expectedChecks = append(expectedChecks, workflow.Name)
+				c.logger.InfoContext(ctx, "adding completed workflow as expected check",
+					"name", workflow.Name,
+					"conclusion", run.Conclusion,
+					"reason", "completed_required_workflow",
+				)
+			}
+		} else if c.isWorkflowExpectedForPR(workflow.Name) {
+			// Workflow hasn't run for this commit - it might be expected to run
+			// This is a heuristic: if the workflow name suggests it should run on PRs, add it as expected
+			expectedChecks = append(expectedChecks, workflow.Name)
+			c.logger.InfoContext(ctx, "adding missing workflow as expected check", "name", workflow.Name, "reason", "expected_for_pr")
+		}
+	}
+
+	c.logger.InfoContext(ctx, "found expected workflow checks", countField, len(expectedChecks), "checks", expectedChecks)
+	return expectedChecks, nil
+}
+
+func (*Client) isWorkflowExpectedForPR(workflowName string) bool {
+	// Conservative heuristic to determine if a workflow is likely to be required for PRs
+	// Only matches workflows with names that strongly suggest they're blocking CI workflows
+	lowerName := strings.ToLower(workflowName)
+
+	// These are patterns that typically indicate required CI workflows
+	requiredPatterns := []string{
+		"build", "test", "ci",
+	}
+
+	// Exact matches for common required workflow names
+	exactMatches := []string{
+		"ci", "build", "test", "tests", "checks", "main",
+	}
+
+	// Check exact matches first
+	for _, exact := range exactMatches {
+		if lowerName == exact {
+			return true
+		}
+	}
+
+	// Check if the workflow name contains required patterns
+	for _, pattern := range requiredPatterns {
+		if strings.Contains(lowerName, pattern) {
+			return true
+		}
+	}
+
+	return false
 }

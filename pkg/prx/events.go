@@ -129,6 +129,7 @@ type Event struct {
 	Bot         bool      `json:"bot,omitempty"`
 	TargetIsBot bool      `json:"target_is_bot,omitempty"`
 	Question    bool      `json:"question,omitempty"`
+	Required    bool      `json:"required,omitempty"`
 }
 
 // createEvent is a helper function to create an Event with common fields.
