@@ -84,6 +84,22 @@ func TestClientWithMock(t *testing.T) {
 					Ref string `json:"ref"`
 				}{Ref: "main"},
 			},
+			// Required status checks endpoints
+			"/repos/owner/repo/commits/abc123/status": githubCombinedStatus{
+				State:      "success",
+				TotalCount: 0,
+				Statuses: []struct {
+					Context     string `json:"context"`
+					State       string `json:"state"`
+					Description string `json:"description"`
+					Required    bool   `json:"required,omitempty"`
+				}{},
+			},
+			"/repos/owner/repo/branches/main/protection": githubBranchProtection{
+				RequiredStatusChecks: &githubRequiredStatusChecks{Strict: false, Contexts: []string{}},
+			},
+			"/repos/owner/repo/rulesets": []githubRuleset{},
+			// Regular endpoints
 			"/repos/owner/repo/pulls/1/commits?page=1&per_page=100":    []*githubPullRequestCommit{},
 			"/repos/owner/repo/issues/1/comments?page=1&per_page=100":  []*githubComment{},
 			"/repos/owner/repo/pulls/1/reviews?page=1&per_page=100":    []*githubReview{},
@@ -118,9 +134,12 @@ func TestClientWithMock(t *testing.T) {
 		t.Errorf("Expected at least 1 event, got %d", len(data.Events))
 	}
 
-	// Verify API calls were made
+	// Verify API calls were made - including required status checks detection calls
 	expectedCalls := []string{
 		"/repos/owner/repo/pulls/1",
+		"/repos/owner/repo/commits/abc123/status",    // required status checks - combined status
+		"/repos/owner/repo/branches/main/protection", // required status checks - branch protection
+		"/repos/owner/repo/rulesets",                 // required status checks - rulesets
 		"/repos/owner/repo/pulls/1/commits?page=1&per_page=100",
 		"/repos/owner/repo/issues/1/comments?page=1&per_page=100",
 		"/repos/owner/repo/pulls/1/reviews?page=1&per_page=100",

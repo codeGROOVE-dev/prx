@@ -284,30 +284,29 @@ type githubPullRequest struct {
 
 // githubBranchProtection represents branch protection settings.
 type githubBranchProtection struct {
-	RequiredStatusChecks *githubRequiredStatusChecks `json:"required_status_checks"`
-	EnforceAdmins        struct {
-		Enabled bool `json:"enabled"`
-	} `json:"enforce_admins"`
+	RequiredStatusChecks       *githubRequiredStatusChecks `json:"required_status_checks"`
 	RequiredPullRequestReviews *struct {
 		RequiredApprovingReviewCount int `json:"required_approving_review_count"`
 	} `json:"required_pull_request_reviews"`
+	EnforceAdmins struct {
+		Enabled bool `json:"enabled"`
+	} `json:"enforce_admins"`
 }
 
 // githubRequiredStatusChecks represents required status checks from branch protection.
 type githubRequiredStatusChecks struct {
 	URL         string   `json:"url"`
-	Strict      bool     `json:"strict"`
-	Contexts    []string `json:"contexts"`
 	ContextsURL string   `json:"contexts_url"`
+	Contexts    []string `json:"contexts"`
 	Checks      []struct {
-		Context string `json:"context"`
 		AppID   *int   `json:"app_id"`
+		Context string `json:"context"`
 	} `json:"checks"`
+	Strict bool `json:"strict"`
 }
 
 // githubRuleset represents a repository ruleset.
 type githubRuleset struct {
-	ID     int    `json:"id"`
 	Name   string `json:"name"`
 	Target string `json:"target"`
 	Rules  []struct {
@@ -318,6 +317,7 @@ type githubRuleset struct {
 			} `json:"required_status_checks"`
 		} `json:"parameters"`
 	} `json:"rules"`
+	ID int `json:"id"`
 }
 
 // githubWorkflows represents the list of workflows in a repository.
@@ -327,11 +327,11 @@ type githubWorkflows struct {
 
 // githubWorkflow represents a GitHub Actions workflow.
 type githubWorkflow struct {
-	ID    int    `json:"id"`
 	Name  string `json:"name"`
 	Path  string `json:"path"`
 	State string `json:"state"`
 	URL   string `json:"url"`
+	ID    int    `json:"id"`
 }
 
 // githubWorkflowRuns represents workflow runs for a specific commit.
@@ -341,21 +341,21 @@ type githubWorkflowRuns struct {
 
 // githubWorkflowRun represents a single workflow run.
 type githubWorkflowRun struct {
-	ID         int    `json:"id"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	URL        string `json:"url"`
+	ID         int    `json:"id"`
 }
 
 // githubCombinedStatus represents the combined status for a commit.
 type githubCombinedStatus struct {
-	State      string `json:"state"`
-	TotalCount int    `json:"total_count"`
-	Statuses   []struct {
+	State    string `json:"state"`
+	Statuses []struct {
 		Context     string `json:"context"`
 		State       string `json:"state"`
 		Description string `json:"description"`
 		Required    bool   `json:"required,omitempty"`
 	} `json:"statuses"`
+	TotalCount int `json:"total_count"`
 }

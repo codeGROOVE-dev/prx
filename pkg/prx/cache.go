@@ -438,7 +438,13 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 }
 
 // cachedStatusChecks fetches status checks with caching.
-func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time, requiredChecks []string) ([]Event, error) {
+func (c *CacheClient) cachedStatusChecks(
+	ctx context.Context,
+	owner, repo string,
+	pr *githubPullRequest,
+	referenceTime time.Time,
+	requiredChecks []string,
+) ([]Event, error) {
 	var allEvents []Event
 	page := 1
 

@@ -150,62 +150,6 @@ func calculateStatusSummary(events []Event, requiredChecks []string) *StatusSumm
 	return summary
 }
 
-// calculateRequiredStatusSummary calculates status summary for only required checks.
-func calculateRequiredStatusSummary(events []Event, requiredChecks []string) *StatusSummary {
-	summary := &StatusSummary{}
-	checkStates := make(map[string]string)
-
-	// Only consider required checks
-	requiredSet := make(map[string]bool)
-	for _, required := range requiredChecks {
-		requiredSet[required] = true
-	}
-
-	for _, event := range events {
-		if (event.Kind == "status_check" || event.Kind == "check_run") && event.Body != "" {
-			// Only include if this is a required check
-			if requiredSet[event.Body] {
-				key := event.Kind + ":" + event.Body
-				checkStates[key] = event.Outcome
-			}
-		}
-	}
-
-	// Track which required checks have been seen
-	requiredChecksSeen := make(map[string]bool)
-
-	for key, outcome := range checkStates {
-		// Extract check name from key (format: "kind:name")
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) == 2 {
-			checkName := parts[1]
-			requiredChecksSeen[checkName] = true
-		}
-
-		switch outcome {
-		case "success":
-			summary.Success++
-		case "failure", "error", "timed_out":
-			summary.Failure++
-		case "pending", "queued", "in_progress", "waiting", "action_required":
-			summary.Pending++
-		case "neutral", "cancelled", "skipped", "stale":
-			summary.Neutral++
-		default:
-			// Unknown outcome, ignore
-		}
-	}
-
-	// Add missing required checks as pending
-	for _, required := range requiredChecks {
-		if !requiredChecksSeen[required] {
-			summary.Pending++
-		}
-	}
-
-	return summary
-}
-
 func calculateApprovalSummary(events []Event) *ApprovalSummary {
 	summary := &ApprovalSummary{}
 
