@@ -1,7 +1,6 @@
 package prx
 
 import (
-	"sort"
 	"strings"
 )
 
@@ -52,12 +51,6 @@ func containsQuestion(text string) bool {
 	return false
 }
 
-func sortEventsByTimestamp(events []Event) {
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
-}
-
 func isHexString(s string) bool {
 	for i := range s {
 		c := s[i]
@@ -105,33 +98,7 @@ func buildPullRequest(pr *githubPullRequest) PullRequest {
 	return result
 }
 
-func calculateTestSummary(events []Event) *TestSummary {
-	summary := &TestSummary{}
-	checkStates := make(map[string]string)
-
-	for _, event := range events {
-		if event.Kind == "check_run" && event.Body != "" {
-			checkStates[event.Body] = event.Outcome
-		}
-	}
-
-	for _, outcome := range checkStates {
-		switch outcome {
-		case "success":
-			summary.Passing++
-		case "failure", "timed_out", "action_required":
-			summary.Failing++
-		case "", "neutral", "cancelled", "skipped", "stale", "queued", "in_progress", "pending":
-			summary.Pending++
-		default:
-			// Unknown outcome, ignore
-		}
-	}
-
-	return summary
-}
-
-func calculateStatusSummary(events []Event) *StatusSummary {
+func calculateStatusSummary(events []Event, requiredChecks []string) *StatusSummary {
 	summary := &StatusSummary{}
 	checkStates := make(map[string]string)
 
@@ -142,18 +109,97 @@ func calculateStatusSummary(events []Event) *StatusSummary {
 		}
 	}
 
-	for _, outcome := range checkStates {
+	// Track which required checks have been seen
+	requiredChecksSeen := make(map[string]bool)
+
+	for key, outcome := range checkStates {
+		// Extract check name from key (format: "kind:name")
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			checkName := parts[1]
+			// Mark this required check as seen
+			for _, required := range requiredChecks {
+				if required == checkName {
+					requiredChecksSeen[required] = true
+					break
+				}
+			}
+		}
+
 		switch outcome {
 		case "success":
 			summary.Success++
-		case "failure", "error", "timed_out", "action_required":
+		case "failure", "error", "timed_out":
 			summary.Failure++
-		case "pending", "queued", "in_progress", "waiting":
+		case "pending", "queued", "in_progress", "waiting", "action_required":
 			summary.Pending++
 		case "neutral", "cancelled", "skipped", "stale":
 			summary.Neutral++
 		default:
 			// Unknown outcome, ignore
+		}
+	}
+
+	// Add missing required checks as pending
+	for _, required := range requiredChecks {
+		if !requiredChecksSeen[required] {
+			summary.Pending++
+		}
+	}
+
+	return summary
+}
+
+// calculateRequiredStatusSummary calculates status summary for only required checks.
+func calculateRequiredStatusSummary(events []Event, requiredChecks []string) *StatusSummary {
+	summary := &StatusSummary{}
+	checkStates := make(map[string]string)
+
+	// Only consider required checks
+	requiredSet := make(map[string]bool)
+	for _, required := range requiredChecks {
+		requiredSet[required] = true
+	}
+
+	for _, event := range events {
+		if (event.Kind == "status_check" || event.Kind == "check_run") && event.Body != "" {
+			// Only include if this is a required check
+			if requiredSet[event.Body] {
+				key := event.Kind + ":" + event.Body
+				checkStates[key] = event.Outcome
+			}
+		}
+	}
+
+	// Track which required checks have been seen
+	requiredChecksSeen := make(map[string]bool)
+
+	for key, outcome := range checkStates {
+		// Extract check name from key (format: "kind:name")
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			checkName := parts[1]
+			requiredChecksSeen[checkName] = true
+		}
+
+		switch outcome {
+		case "success":
+			summary.Success++
+		case "failure", "error", "timed_out":
+			summary.Failure++
+		case "pending", "queued", "in_progress", "waiting", "action_required":
+			summary.Pending++
+		case "neutral", "cancelled", "skipped", "stale":
+			summary.Neutral++
+		default:
+			// Unknown outcome, ignore
+		}
+	}
+
+	// Add missing required checks as pending
+	for _, required := range requiredChecks {
+		if !requiredChecksSeen[required] {
+			summary.Pending++
 		}
 	}
 

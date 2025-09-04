@@ -21,8 +21,6 @@ const (
 	cacheDirPerms = 0o700
 	// cacheFilePerms is the permission for cache files.
 	cacheFilePerms = 0o600
-	// maxConcurrentRequests is the number of concurrent goroutines for cache operations.
-	maxConcurrentCacheRequests = 7
 
 	// Log field constants.
 	logFieldError = "error"
@@ -71,158 +69,7 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 
 // PullRequest fetches a pull request with all its events and metadata, with caching support.
 func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
-	c.logger.InfoContext(ctx, "fetching pull request with cache",
-		"owner", owner,
-		"repo", repo,
-		"pr", prNumber,
-		"reference_time", referenceTime,
-	)
-
-	pr, err := c.cachedPullRequest(ctx, owner, repo, prNumber, referenceTime)
-	if err != nil {
-		return nil, fmt.Errorf("fetching pull request: %w", err)
-	}
-
-	var events []Event
-
-	pullRequest := buildPullRequest(pr)
-
-	// Check if PR author has write access
-	if pr.User != nil {
-		pullRequest.AuthorWriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-	}
-
-	if !pr.ClosedAt.IsZero() {
-		pullRequest.ClosedAt = &pr.ClosedAt
-	}
-	if !pr.MergedAt.IsZero() {
-		pullRequest.MergedAt = &pr.MergedAt
-	}
-	if pr.MergedBy != nil {
-		pullRequest.MergedBy = pr.MergedBy.Login
-	}
-
-	prOpenedEvent := Event{
-		Kind:        "pr_opened",
-		Timestamp:   pr.CreatedAt,
-		Actor:       pr.User.Login,
-		Bot:         isBot(pr.User),
-		WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
-	}
-	events = append(events, prOpenedEvent)
-
-	prUpdatedAt := pr.UpdatedAt
-
-	var errs []error
-
-	// Fetch all event types in parallel
-	results := make(chan fetchResult, maxConcurrentCacheRequests)
-
-	go func() {
-		e, err := c.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
-	}()
-
-	go func() {
-		e, err := c.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
-	}()
-
-	go func() {
-		e, err := c.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
-	}()
-
-	go func() {
-		e, err := c.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
-	}()
-
-	go func() {
-		e, err := c.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
-	}()
-
-	go func() {
-		e, err := c.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
-	}()
-
-	go func() {
-		e, testState, err := c.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
-	}()
-
-	// Collect results
-	var testStateFromAPI string
-	for range maxConcurrentCacheRequests {
-		r := <-results
-		if r.err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, logFieldError, r.err)
-			errs = append(errs, r.err)
-		} else {
-			events = append(events, r.events...)
-			// Capture test state from check runs
-			if r.name == "check runs" && r.testState != "" {
-				testStateFromAPI = r.testState
-			}
-		}
-	}
-
-	if len(events) == 0 && len(errs) > 0 {
-		return nil, fmt.Errorf("failed to fetch any events: %w", errs[0])
-	}
-
-	if pr.Merged {
-		mergedEvent := Event{
-			Kind:      "pr_merged",
-			Timestamp: pr.MergedAt,
-		}
-		if pr.MergedBy != nil {
-			mergedEvent.Actor = pr.MergedBy.Login
-			mergedEvent.Bot = isBot(pr.MergedBy)
-		} else {
-			mergedEvent.Actor = "unknown"
-		}
-		events = append(events, mergedEvent)
-	} else if pr.State == "closed" {
-		closedEvent := Event{
-			Kind:        "pr_closed",
-			Timestamp:   pr.ClosedAt,
-			Actor:       pr.User.Login,
-			Bot:         isBot(pr.User),
-			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
-		}
-		events = append(events, closedEvent)
-	}
-
-	// Filter events to exclude non-failure status_check events
-	events = filterEvents(events)
-
-	sortEventsByTimestamp(events)
-
-	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
-	upgradeWriteAccess(events)
-
-	// Use test state from API (calculated from current check run statuses)
-	pullRequest.TestState = testStateFromAPI
-
-	pullRequest.TestSummary = calculateTestSummary(events)
-	pullRequest.StatusSummary = calculateStatusSummary(events)
-	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
-
-	c.logger.InfoContext(ctx, "successfully fetched pull request with cache",
-		"owner", owner,
-		"repo", repo,
-		"pr", prNumber,
-		"event_count", len(events),
-		"cache_hits", len(events)-len(errs),
-	)
-
-	return &PullRequestData{
-		PullRequest: pullRequest,
-		Events:      events,
-	}, nil
+	return c.PullRequestWithReferenceTime(ctx, owner, repo, prNumber, referenceTime)
 }
 
 // cachedPullRequest fetches a pull request with caching.
@@ -435,7 +282,7 @@ func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prN
 				"state", review.State)
 
 			event := createEvent("review", review.SubmittedAt, review.User, review.Body)
-			event.Outcome = review.State // "approved", "changes_requested", "commented"
+			event.Outcome = strings.ToLower(review.State) // Convert "APPROVED" -> "approved"
 			event.WriteAccess = c.writeAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
 
 			allEvents = append(allEvents, event)
@@ -591,9 +438,15 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 }
 
 // cachedStatusChecks fetches status checks with caching.
-func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time) ([]Event, error) {
+func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time, requiredChecks []string) ([]Event, error) {
 	var allEvents []Event
 	page := 1
+
+	// Create a set for quick lookup of required checks
+	requiredSet := make(map[string]bool)
+	for _, required := range requiredChecks {
+		requiredSet[required] = true
+	}
 
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/statuses/%s?page=%d&per_page=%d",
@@ -617,6 +470,7 @@ func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string
 				Bot:       isBot(status.Creator),
 				Body:      status.Context, // Store check name in Body
 				Outcome:   status.State,   // Store state in Outcome
+				Required:  requiredSet[status.Context],
 			}
 			// Include description if available
 			if status.Description != "" {
@@ -636,10 +490,16 @@ func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string
 
 // cachedCheckRuns fetches check runs with caching.
 func (c *CacheClient) cachedCheckRuns(
-	ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time,
+	ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time, requiredChecks []string,
 ) ([]Event, string, error) {
 	var allEvents []Event
 	page := 1
+
+	// Create a set for quick lookup of required checks
+	requiredSet := make(map[string]bool)
+	for _, required := range requiredChecks {
+		requiredSet[required] = true
+	}
 
 	// Track current states for test state calculation
 	hasQueued := false
@@ -704,6 +564,7 @@ func (c *CacheClient) cachedCheckRuns(
 				Bot:       true,
 				Outcome:   outcome,
 				Body:      run.Name, // Store check run name in body field
+				Required:  requiredSet[run.Name],
 			}
 			allEvents = append(allEvents, event)
 		}
