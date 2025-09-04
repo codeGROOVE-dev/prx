@@ -10,8 +10,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+)
+
+const (
+	// HTTP client configuration constants.
+	maxIdleConns        = 100
+	maxIdleConnsPerHost = 10
+	idleConnTimeoutSec  = 90
+
+	// Concurrency constants.
+	maxConcurrentRequests = 7
 )
 
 // Client provides methods to fetch GitHub pull request events.
@@ -24,6 +36,7 @@ type Client struct {
 	logger          *slog.Logger
 	token           string // Store token for recreating client with new transport
 	permissionCache *permissionCache
+	cacheDir        string // empty if caching is disabled
 }
 
 // isBot returns true if the user appears to be a bot.
@@ -56,28 +69,48 @@ func WithHTTPClient(httpClient *http.Client) Option {
 		} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
 			httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
 		}
-		c.github = newGithubClient(httpClient, c.token)
+		c.github = &githubClient{client: httpClient, token: c.token, api: githubAPI}
+	}
+}
+
+// WithNoCache disables disk-based caching.
+func WithNoCache() Option {
+	return func(c *Client) {
+		c.cacheDir = ""
 	}
 }
 
 // NewClient creates a new Client with the given GitHub token.
+// Caching is enabled by default - use WithNoCache() to disable.
 // If token is empty, WithHTTPClient option must be provided.
 func NewClient(token string, opts ...Option) *Client {
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        maxIdleConns,
+		MaxIdleConnsPerHost: maxIdleConnsPerHost,
+		IdleConnTimeout:     idleConnTimeoutSec * time.Second,
 		DisableCompression:  false,
 		DisableKeepAlives:   false,
 	}
 
+	// Set up default cache directory
+	userCacheDir, err := os.UserCacheDir()
+	if err != nil {
+		userCacheDir = os.TempDir()
+	}
+	defaultCacheDir := filepath.Join(userCacheDir, "prx")
+
 	c := &Client{
-		logger: slog.Default(),
-		token:  token,
-		github: newGithubClient(&http.Client{
-			Transport: &RetryTransport{Base: transport},
-			Timeout:   30 * time.Second,
-		}, token),
+		logger:   slog.Default(),
+		token:    token,
+		cacheDir: defaultCacheDir, // Enable caching by default
+		github: &githubClient{
+			client: &http.Client{
+				Transport: &RetryTransport{Base: transport},
+				Timeout:   30 * time.Second,
+			},
+			token: token,
+			api:   githubAPI,
+		},
 	}
 
 	// Initialize in-memory permission cache (no disk persistence for regular client)
@@ -105,7 +138,11 @@ func (c *Client) writeAccess(ctx context.Context, owner, repo string, user *gith
 		return WriteAccessDefinitely
 	case "MEMBER":
 		// Need to check via API
-		perm, _ := c.userPermissionCached(ctx, owner, repo, user.Login, association)
+		perm, err := c.userPermissionCached(ctx, owner, repo, user.Login, association)
+		if err != nil {
+			c.logger.DebugContext(ctx, "failed to get user permission", "error", err, "user", user.Login)
+			return WriteAccessUnlikely
+		}
 		if perm == "uncertain" {
 			return WriteAccessLikely
 		}
@@ -168,6 +205,20 @@ func (c *Client) userPermissionCached(ctx context.Context, owner, repo, username
 
 // PullRequest fetches a pull request with all its events and metadata.
 func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
+	// If caching is enabled, delegate to cached implementation
+	if c.cacheDir != "" {
+		cacheClient := &CacheClient{
+			Client:   c,
+			cacheDir: c.cacheDir,
+		}
+		return cacheClient.PullRequest(ctx, owner, repo, prNumber, time.Now())
+	}
+
+	// Original non-cached implementation
+	return c.pullRequestNonCached(ctx, owner, repo, prNumber)
+}
+
+func (c *Client) pullRequestNonCached(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
 	c.logger.InfoContext(ctx, "fetching pull request",
 		"owner", owner,
 		"repo", repo,
@@ -193,23 +244,7 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		"changed_files", pr.ChangedFiles,
 		"pr", prNumber)
 
-	pullRequest := PullRequest{
-		Number:         pr.Number,
-		Title:          pr.Title,
-		Body:           truncate(pr.Body, 256),
-		State:          pr.State,
-		Draft:          pr.Draft,
-		Merged:         pr.Merged,
-		Mergeable:      pr.Mergeable,
-		MergeableState: pr.MergeableState,
-		CreatedAt:      pr.CreatedAt,
-		UpdatedAt:      pr.UpdatedAt,
-		Author:         pr.User.Login,
-		AuthorBot:      isBot(pr.User),
-		Additions:      pr.Additions,
-		Deletions:      pr.Deletions,
-		ChangedFiles:   pr.ChangedFiles,
-	}
+	pullRequest := buildPullRequest(&pr)
 
 	// Check if PR author has write access
 	if pr.User != nil {
@@ -245,79 +280,85 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 	}
 
 	prOpenedEvent := Event{
-		Kind:        "pr_opened",
-		Timestamp:   pr.CreatedAt,
-		Actor:       pr.User.Login,
-		Bot:         isBot(pr.User),
-		WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+		Kind:      "pr_opened",
+		Timestamp: pr.CreatedAt,
+	}
+
+	if pr.User != nil {
+		prOpenedEvent.Actor = pr.User.Login
+		prOpenedEvent.Bot = isBot(pr.User)
+		prOpenedEvent.WriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
+	} else {
+		prOpenedEvent.Actor = "unknown"
+		prOpenedEvent.Bot = false
+		prOpenedEvent.WriteAccess = WriteAccessNA
 	}
 	events = append(events, prOpenedEvent)
 
 	// Fetch all event types in parallel
-	type result struct {
-		events []Event
-		err    error
-		name   string
-	}
-
-	results := make(chan result, 7)
+	results := make(chan fetchResult, maxConcurrentRequests)
 
 	go func() {
 		e, err := c.commits(ctx, owner, repo, prNumber)
-		results <- result{e, err, "commits"}
+		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.comments(ctx, owner, repo, prNumber)
-		results <- result{e, err, "comments"}
+		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.reviews(ctx, owner, repo, prNumber)
-		results <- result{e, err, "reviews"}
+		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.reviewComments(ctx, owner, repo, prNumber)
-		results <- result{e, err, "review comments"}
+		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.timelineEvents(ctx, owner, repo, prNumber)
-		results <- result{e, err, "timeline events"}
+		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.statusChecks(ctx, owner, repo, &pr)
-		results <- result{e, err, "status checks"}
+		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
 	}()
 
 	go func() {
-		e, err := c.checkRuns(ctx, owner, repo, &pr)
-		results <- result{e, err, "check runs"}
+		e, testState, err := c.checkRuns(ctx, owner, repo, &pr)
+		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
 	}()
 
 	// Collect results
-	var errors []error
-	for i := 0; i < 7; i++ {
+	var errs []error
+	var testStateFromAPI string
+	for range maxConcurrentRequests {
 		r := <-results
 		if r.err != nil {
 			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
-			errors = append(errors, r.err)
+			errs = append(errs, r.err)
 		} else {
 			events = append(events, r.events...)
+			// Capture test state from check runs
+			if r.name == "check runs" && r.testState != "" {
+				testStateFromAPI = r.testState
+			}
 		}
 	}
 
 	// If we have no events at all and errors occurred, return the first error
-	if len(events) == 0 && len(errors) > 0 {
-		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
+	if len(events) == 0 && len(errs) > 0 {
+		return nil, fmt.Errorf("failed to fetch any events: %w", errs[0])
 	}
 
 	// Log a warning if we had partial failures
-	if len(errors) > 0 {
+	if len(errs) > 0 {
 		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data",
-			"error_count", len(errors),
+			"error_count", len(errs),
 			"event_count", len(events))
 	}
 
@@ -335,11 +376,18 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 		events = append(events, mergedEvent)
 	} else if pr.State == "closed" {
 		closedEvent := Event{
-			Kind:        "pr_closed",
-			Timestamp:   pr.ClosedAt,
-			Actor:       pr.User.Login,
-			Bot:         isBot(pr.User),
-			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+			Kind:      "pr_closed",
+			Timestamp: pr.ClosedAt,
+		}
+
+		if pr.User != nil {
+			closedEvent.Actor = pr.User.Login
+			closedEvent.Bot = isBot(pr.User)
+			closedEvent.WriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
+		} else {
+			closedEvent.Actor = "unknown"
+			closedEvent.Bot = false
+			closedEvent.WriteAccess = WriteAccessNA
 		}
 		events = append(events, closedEvent)
 	}
@@ -352,20 +400,12 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
 	upgradeWriteAccess(events)
 
-	testSummary := calculateTestSummary(events)
-	if testSummary.Passing > 0 || testSummary.Failing > 0 || testSummary.Pending > 0 {
-		pullRequest.TestSummary = testSummary
-	}
+	// Use test state from API (calculated from current check run statuses)
+	pullRequest.TestState = testStateFromAPI
 
-	statusSummary := calculateStatusSummary(events)
-	if statusSummary.Success > 0 || statusSummary.Failure > 0 || statusSummary.Pending > 0 || statusSummary.Neutral > 0 {
-		pullRequest.StatusSummary = statusSummary
-	}
-
-	approvalSummary := calculateApprovalSummary(events)
-	if approvalSummary.ApprovalsWithWriteAccess > 0 || approvalSummary.ApprovalsWithoutWriteAccess > 0 || approvalSummary.ChangesRequested > 0 {
-		pullRequest.ApprovalSummary = approvalSummary
-	}
+	pullRequest.TestSummary = calculateTestSummary(events)
+	pullRequest.StatusSummary = calculateStatusSummary(events)
+	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
 
 	c.logger.InfoContext(ctx, "successfully fetched pull request",
 		"owner", owner,

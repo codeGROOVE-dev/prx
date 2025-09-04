@@ -4,46 +4,43 @@ import (
 	"time"
 )
 
+// TestState represents the overall testing status of a pull request.
+const (
+	TestStateNone    = ""        // No tests or unknown state
+	TestStateQueued  = "queued"  // Tests are queued to run
+	TestStateRunning = "running" // Tests are currently executing
+	TestStatePassing = "passing" // All tests passed
+	TestStateFailing = "failing" // At least one test failed
+)
+
 // PullRequest represents a GitHub pull request with its essential metadata.
 type PullRequest struct {
-	// Basic Information
-	Number int    `json:"number"` // PR number (e.g., 1773)
-	Title  string `json:"title"`  // PR title
-	Body   string `json:"body"`   // PR description (truncated to 256 chars)
-	Author string `json:"author"` // GitHub username of the PR author
-
-	// Status Information
-	State          string `json:"state"`               // Current state: "open" or "closed"
-	Draft          bool   `json:"draft"`               // True if this is a draft PR
-	Merged         bool   `json:"merged"`              // True if the PR was merged
-	MergedBy       string `json:"merged_by,omitempty"` // Username who merged the PR
-	Mergeable      *bool  `json:"mergeable"`           // GitHub's assessment: true, false, or null (still computing)
-	MergeableState string `json:"mergeable_state"`     // Details: "clean", "dirty", "blocked", "unstable", "unknown"
-
-	// Timestamps
-	CreatedAt time.Time  `json:"created_at"`          // When the PR was created
-	UpdatedAt time.Time  `json:"updated_at"`          // Last activity on the PR
-	ClosedAt  *time.Time `json:"closed_at,omitempty"` // When the PR was closed (nil if still open)
-	MergedAt  *time.Time `json:"merged_at,omitempty"` // When the PR was merged (nil if not merged)
-
-	// Code Changes
-	Additions    int `json:"additions"`     // Total lines added
-	Deletions    int `json:"deletions"`     // Total lines removed
-	ChangedFiles int `json:"changed_files"` // Number of files modified
-
-	// People & Permissions
-	AuthorBot          bool     `json:"author_bot"`                    // True if author is a bot account
-	AuthorWriteAccess  int      `json:"author_write_access,omitempty"` // Author's repository permissions (-2 to 2, same as Event.WriteAccess)
-	Assignees          []string `json:"assignees,omitempty"`           // Current assignees
-	RequestedReviewers []string `json:"requested_reviewers,omitempty"` // Pending review requests
-
-	// Organization
-	Labels []string `json:"labels,omitempty"` // Applied labels
-
-	// Aggregated Summaries (computed from events)
-	TestSummary     *TestSummary     `json:"test_summary,omitempty"`     // Test results summary
-	StatusSummary   *StatusSummary   `json:"status_summary,omitempty"`   // All checks summary
-	ApprovalSummary *ApprovalSummary `json:"approval_summary,omitempty"` // Review approvals summary
+	CreatedAt          time.Time        `json:"created_at"`
+	UpdatedAt          time.Time        `json:"updated_at"`
+	ClosedAt           *time.Time       `json:"closed_at,omitempty"`
+	Mergeable          *bool            `json:"mergeable"`
+	TestSummary        *TestSummary     `json:"test_summary,omitempty"`
+	ApprovalSummary    *ApprovalSummary `json:"approval_summary,omitempty"`
+	StatusSummary      *StatusSummary   `json:"status_summary,omitempty"`
+	MergedAt           *time.Time       `json:"merged_at,omitempty"`
+	MergeableState     string           `json:"mergeable_state"`
+	Author             string           `json:"author"`
+	Body               string           `json:"body"`
+	Title              string           `json:"title"`
+	MergedBy           string           `json:"merged_by,omitempty"`
+	State              string           `json:"state"`
+	TestState          string           `json:"test_state,omitempty"`
+	Assignees          []string         `json:"assignees,omitempty"`
+	Labels             []string         `json:"labels,omitempty"`
+	RequestedReviewers []string         `json:"requested_reviewers,omitempty"`
+	AuthorWriteAccess  int              `json:"author_write_access,omitempty"`
+	Number             int              `json:"number"`
+	ChangedFiles       int              `json:"changed_files"`
+	Deletions          int              `json:"deletions"`
+	Additions          int              `json:"additions"`
+	AuthorBot          bool             `json:"author_bot"`
+	Merged             bool             `json:"merged"`
+	Draft              bool             `json:"draft"`
 }
 
 // TestSummary aggregates test results from check runs.
@@ -75,6 +72,6 @@ type ApprovalSummary struct {
 
 // PullRequestData contains a pull request and all its associated events.
 type PullRequestData struct {
-	PullRequest PullRequest `json:"pull_request"`
 	Events      []Event     `json:"events"`
+	PullRequest PullRequest `json:"pull_request"`
 }

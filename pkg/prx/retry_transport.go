@@ -57,7 +57,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var lastErr error
 
 	err := retry.Do(
-		func() error {
+		func() error { //nolint:contextcheck // Context is accessed via closure from req.Context()
 			// Reset the body for each retry attempt
 			if bodyBytes != nil {
 				req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -65,7 +65,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			var err error
 			start := time.Now()
-			resp, err = t.Base.RoundTrip(req)
+			resp, err = t.Base.RoundTrip(req) //nolint:bodyclose // Response body is handled by caller in successful cases
 			elapsed := time.Since(start)
 			if err != nil {
 				slog.ErrorContext(req.Context(), "HTTP request failed",
@@ -83,7 +83,11 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			// Retry on 429 (rate limit) or 5xx server errors
 			if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
-				bodyBytes, _ := io.ReadAll(resp.Body)
+				bodyBytes, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					slog.DebugContext(req.Context(), "failed to read response body for retry", "error", readErr)
+					bodyBytes = nil
+				}
 				if closeErr := resp.Body.Close(); closeErr != nil {
 					slog.DebugContext(req.Context(), "failed to close response body for retry", "error", closeErr)
 				}
@@ -104,7 +108,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		retry.MaxDelay(retryMaxDelay),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(retryMaxJitter),
-		retry.RetryIf(func(err error) bool {
+		retry.RetryIf(func(err error) bool { //nolint:contextcheck // Context is accessed via closure from req.Context()
 			var retryErr *retryableError
 			if errors.As(err, &retryErr) {
 				return true

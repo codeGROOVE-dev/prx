@@ -3,10 +3,13 @@ package prx
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,6 +17,15 @@ import (
 const (
 	// cacheRetentionPeriod is how long cache files are kept before cleanup.
 	cacheRetentionPeriod = 20 * 24 * time.Hour // 20 days
+	// cacheDirPerms is the permission for cache directories.
+	cacheDirPerms = 0o700
+	// cacheFilePerms is the permission for cache files.
+	cacheFilePerms = 0o600
+	// maxConcurrentRequests is the number of concurrent goroutines for cache operations.
+	maxConcurrentCacheRequests = 7
+
+	// Log field constants.
+	logFieldError = "error"
 )
 
 // CacheClient wraps the regular Client and adds disk-based caching.
@@ -25,30 +37,26 @@ type CacheClient struct {
 
 // cacheEntry represents a cached API response.
 type cacheEntry struct {
-	Data      json.RawMessage `json:"data"`
 	UpdatedAt time.Time       `json:"updated_at"`
 	CachedAt  time.Time       `json:"cached_at"`
+	Data      json.RawMessage `json:"data"`
 }
 
 // NewCacheClient creates a new caching client with the given cache directory.
 func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
 	cleanPath := filepath.Clean(cacheDir)
 	if !filepath.IsAbs(cleanPath) {
-		return nil, fmt.Errorf("cache directory must be absolute path")
+		return nil, errors.New("cache directory must be absolute path")
 	}
 
-	if err := os.MkdirAll(cleanPath, 0700); err != nil {
+	if err := os.MkdirAll(cleanPath, cacheDirPerms); err != nil {
 		return nil, fmt.Errorf("creating cache directory: %w", err)
 	}
 
 	client := NewClient(token, opts...)
 
 	// Initialize permission cache with disk persistence for CacheClient
-	permCache, err := newPermissionCache(cleanPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating permission cache: %w", err)
-	}
-	client.permissionCache = permCache
+	client.permissionCache = newPermissionCache(cleanPath)
 
 	cc := &CacheClient{
 		Client:   client,
@@ -77,23 +85,7 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 
 	var events []Event
 
-	pullRequest := PullRequest{
-		Number:         pr.Number,
-		Title:          pr.Title,
-		Body:           pr.Body,
-		State:          pr.State,
-		Draft:          pr.Draft,
-		Merged:         pr.Merged,
-		Mergeable:      pr.Mergeable,
-		MergeableState: pr.MergeableState,
-		CreatedAt:      pr.CreatedAt,
-		UpdatedAt:      pr.UpdatedAt,
-		Author:         pr.User.Login,
-		AuthorBot:      isBot(pr.User),
-		Additions:      pr.Additions,
-		Deletions:      pr.Deletions,
-		ChangedFiles:   pr.ChangedFiles,
-	}
+	pullRequest := buildPullRequest(pr)
 
 	// Check if PR author has write access
 	if pr.User != nil {
@@ -121,65 +113,64 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 
 	prUpdatedAt := pr.UpdatedAt
 
-	var errors []error
+	var errs []error
 
 	// Fetch all event types in parallel
-	type result struct {
-		events []Event
-		err    error
-		name   string
-	}
-
-	results := make(chan result, 7)
+	results := make(chan fetchResult, maxConcurrentCacheRequests)
 
 	go func() {
 		e, err := c.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- result{e, err, "commits"}
+		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- result{e, err, "comments"}
+		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- result{e, err, "reviews"}
+		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- result{e, err, "review comments"}
+		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- result{e, err, "timeline events"}
+		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
 	}()
 
 	go func() {
 		e, err := c.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt)
-		results <- result{e, err, "status checks"}
+		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
 	}()
 
 	go func() {
-		e, err := c.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt)
-		results <- result{e, err, "check runs"}
+		e, testState, err := c.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt)
+		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
 	}()
 
 	// Collect results
-	for i := 0; i < 7; i++ {
+	var testStateFromAPI string
+	for range maxConcurrentCacheRequests {
 		r := <-results
 		if r.err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
-			errors = append(errors, r.err)
+			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, logFieldError, r.err)
+			errs = append(errs, r.err)
 		} else {
 			events = append(events, r.events...)
+			// Capture test state from check runs
+			if r.name == "check runs" && r.testState != "" {
+				testStateFromAPI = r.testState
+			}
 		}
 	}
 
-	if len(events) == 0 && len(errors) > 0 {
-		return nil, fmt.Errorf("failed to fetch any events: %w", errors[0])
+	if len(events) == 0 && len(errs) > 0 {
+		return nil, fmt.Errorf("failed to fetch any events: %w", errs[0])
 	}
 
 	if pr.Merged {
@@ -213,12 +204,19 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
 	upgradeWriteAccess(events)
 
+	// Use test state from API (calculated from current check run statuses)
+	pullRequest.TestState = testStateFromAPI
+
+	pullRequest.TestSummary = calculateTestSummary(events)
+	pullRequest.StatusSummary = calculateStatusSummary(events)
+	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
+
 	c.logger.InfoContext(ctx, "successfully fetched pull request with cache",
 		"owner", owner,
 		"repo", repo,
 		"pr", prNumber,
 		"event_count", len(events),
-		"cache_hits", len(events)-len(errors),
+		"cache_hits", len(events)-len(errs),
 	)
 
 	return &PullRequestData{
@@ -229,22 +227,25 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 
 // cachedPullRequest fetches a pull request with caching.
 func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*githubPullRequest, error) {
-	cacheKey := c.cacheKey("pr", owner, repo, fmt.Sprintf("%d", prNumber))
+	cacheKey := c.cacheKey("pr", owner, repo, strconv.Itoa(prNumber))
 
 	var cached cacheEntry
-	if c.loadCache(cacheKey, &cached) {
+	if c.loadCache(ctx, cacheKey, &cached) {
 		if cached.CachedAt.After(referenceTime) || cached.CachedAt.Equal(referenceTime) {
 			var pr githubPullRequest
-			if err := json.Unmarshal(cached.Data, &pr); err != nil {
-				c.logger.WarnContext(ctx, "failed to unmarshal cached pull request", "error", err)
-			} else {
-				c.logger.InfoContext(ctx, "cache hit: pull request",
-					"owner", owner,
-					"repo", repo,
-					"pr", prNumber,
-					"cached_at", cached.CachedAt)
-				return &pr, nil
+			err := json.Unmarshal(cached.Data, &pr)
+			if err != nil {
+				c.logger.WarnContext(ctx, "failed to unmarshal cached pull request", logFieldError, err)
+				// Continue to fetch from API instead of returning error
+				goto fetchFromAPI
 			}
+
+			c.logger.InfoContext(ctx, "cache hit: pull request",
+				"owner", owner,
+				"repo", repo,
+				"pr", prNumber,
+				"cached_at", cached.CachedAt)
+			return &pr, nil
 		}
 		c.logger.InfoContext(ctx, "cache miss: pull request expired",
 			"owner", owner,
@@ -259,6 +260,7 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 			"pr", prNumber)
 	}
 
+fetchFromAPI:
 	// Fetch from API
 	c.logger.InfoContext(ctx, "fetching pull request from GitHub API",
 		"owner", owner,
@@ -280,8 +282,8 @@ func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string,
 		CachedAt:  time.Now(),
 		UpdatedAt: pr.UpdatedAt,
 	}
-	if err := c.saveCache(cacheKey, cached); err != nil {
-		c.logger.WarnContext(ctx, "failed to save pull request to cache", "error", err)
+	if err := c.saveCache(ctx, cacheKey, cached); err != nil {
+		c.logger.WarnContext(ctx, "failed to save pull request to cache", logFieldError, err)
 	}
 
 	return &pr, nil
@@ -292,7 +294,7 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 	cacheKey := c.cacheKey(dataType, path)
 
 	var cached cacheEntry
-	if c.loadCache(cacheKey, &cached) {
+	if c.loadCache(ctx, cacheKey, &cached) {
 		if cached.UpdatedAt.After(referenceTime) || cached.UpdatedAt.Equal(referenceTime) {
 			c.logger.InfoContext(ctx, "cache hit", "type", dataType, "path", path, "cached_at", cached.CachedAt)
 			return cached.Data, nil
@@ -314,8 +316,8 @@ func (c *CacheClient) cachedFetch(ctx context.Context, dataType, path string, re
 		UpdatedAt: referenceTime,
 		CachedAt:  time.Now(),
 	}
-	if err := c.saveCache(cacheKey, cached); err != nil {
-		c.logger.WarnContext(ctx, "failed to save to cache", "type", dataType, "error", err)
+	if err := c.saveCache(ctx, cacheKey, cached); err != nil {
+		c.logger.WarnContext(ctx, "failed to save to cache", "type", dataType, logFieldError, err)
 	}
 
 	return rawData, nil
@@ -345,7 +347,7 @@ func (c *CacheClient) cachedCommits(ctx context.Context, owner, repo string, prN
 			event := Event{
 				Kind:      "commit",
 				Timestamp: commit.Commit.Author.Date,
-				Body:      truncate(commit.Commit.Message, 256),
+				Body:      truncate(commit.Commit.Message),
 			}
 
 			if commit.Author != nil {
@@ -423,18 +425,20 @@ func (c *CacheClient) cachedReviews(ctx context.Context, owner, repo string, prN
 		}
 
 		for _, review := range reviews {
-			if review.State != "" {
-				c.logger.InfoContext(ctx, "processing review",
-					"reviewer", review.User.Login,
-					"author_association", review.AuthorAssociation,
-					"state", review.State)
-
-				event := createEvent("review", review.SubmittedAt, review.User, review.Body)
-				event.Outcome = review.State // "approved", "changes_requested", "commented"
-				event.WriteAccess = c.writeAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
-
-				allEvents = append(allEvents, event)
+			if review.State == "" {
+				continue
 			}
+
+			c.logger.InfoContext(ctx, "processing review",
+				"reviewer", review.User.Login,
+				"author_association", review.AuthorAssociation,
+				"state", review.State)
+
+			event := createEvent("review", review.SubmittedAt, review.User, review.Body)
+			event.Outcome = review.State // "approved", "changes_requested", "commented"
+			event.WriteAccess = c.writeAccess(ctx, owner, repo, review.User, review.AuthorAssociation)
+
+			allEvents = append(allEvents, event)
 		}
 
 		if len(reviews) < maxPerPage {
@@ -519,7 +523,7 @@ func (c *CacheClient) cachedTimelineEvents(ctx context.Context, owner, repo stri
 				if te.Actor == nil {
 					continue
 				}
-				if te.RequestedReviewer != nil {
+				if te.RequestedReviewer != nil { //nolint:gocritic // This checks different conditions, not suitable for switch
 					event = Event{
 						Kind:        te.Event,
 						Timestamp:   te.CreatedAt,
@@ -616,7 +620,7 @@ func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string
 			}
 			// Include description if available
 			if status.Description != "" {
-				event.Body = event.Body + ": " + truncate(status.Description, 256)
+				event.Body = event.Body + ": " + truncate(status.Description)
 			}
 			allEvents = append(allEvents, event)
 		}
@@ -631,9 +635,17 @@ func (c *CacheClient) cachedStatusChecks(ctx context.Context, owner, repo string
 }
 
 // cachedCheckRuns fetches check runs with caching.
-func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time) ([]Event, error) {
+func (c *CacheClient) cachedCheckRuns(
+	ctx context.Context, owner, repo string, pr *githubPullRequest, referenceTime time.Time,
+) ([]Event, string, error) {
 	var allEvents []Event
 	page := 1
+
+	// Track current states for test state calculation
+	hasQueued := false
+	hasRunning := false
+	hasFailing := false
+	hasPassing := false
 
 	for {
 		path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?page=%d&per_page=%d",
@@ -641,26 +653,57 @@ func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, p
 
 		rawData, err := c.cachedFetch(ctx, "check_runs", path, referenceTime)
 		if err != nil {
-			return nil, err
+			return nil, TestStateNone, err
 		}
 
 		var response githubCheckRuns
 		if err := json.Unmarshal(rawData, &response); err != nil {
-			return nil, fmt.Errorf("unmarshaling check runs: %w", err)
+			return nil, TestStateNone, fmt.Errorf("unmarshaling check runs: %w", err)
 		}
 
 		for _, run := range response.CheckRuns {
+			var outcome string
+			var timestamp time.Time
+			if !run.CompletedAt.IsZero() { //nolint:gocritic // This checks time fields and different conditions, not suitable for switch
+				// Test has completed
+				outcome = run.Conclusion
+				timestamp = run.CompletedAt
+
+				// Track state for completed tests
+				switch outcome {
+				case "success":
+					hasPassing = true
+				case "failure", "timed_out", "action_required":
+					hasFailing = true
+				default:
+					// Other conclusions like "neutral", "cancelled", "skipped" don't affect test state
+				}
+			} else if run.Status == "queued" {
+				// Test is queued
+				outcome = "queued"
+				hasQueued = true
+				timestamp = run.StartedAt
+				// If we don't have a timestamp, we'll use zero time which will sort first
+			} else if run.Status == "in_progress" {
+				// Test is running
+				outcome = "in_progress"
+				hasRunning = true
+				timestamp = run.StartedAt
+				// If we don't have a timestamp, we'll use zero time which will sort first
+			} else {
+				// Unknown status, use what we have
+				outcome = run.Status
+				timestamp = run.StartedAt
+				// If we don't have a timestamp, we'll use zero time which will sort first
+			}
+
 			event := Event{
 				Kind:      "check_run",
-				Timestamp: run.CompletedAt,
+				Timestamp: timestamp,
 				Actor:     "github",
 				Bot:       true,
-				Body:      run.Name,       // Store check name in Body
-				Outcome:   run.Conclusion, // Store conclusion in Outcome
-			}
-			if run.CompletedAt.IsZero() {
-				event.Timestamp = run.StartedAt
-				event.Outcome = run.Status
+				Outcome:   outcome,
+				Body:      run.Name, // Store check run name in body field
 			}
 			allEvents = append(allEvents, event)
 		}
@@ -671,44 +714,58 @@ func (c *CacheClient) cachedCheckRuns(ctx context.Context, owner, repo string, p
 		page++
 	}
 
-	return allEvents, nil
+	// Calculate overall test state based on current API data
+	var testState string
+	if hasFailing { //nolint:gocritic // This checks priority order of boolean flags, switch would be less readable
+		testState = TestStateFailing
+	} else if hasRunning {
+		testState = TestStateRunning
+	} else if hasQueued {
+		testState = TestStateQueued
+	} else if hasPassing {
+		testState = TestStatePassing
+	} else {
+		testState = TestStateNone
+	}
+
+	return allEvents, testState, nil
 }
 
-func (c *CacheClient) cacheKey(parts ...string) string {
+func (*CacheClient) cacheKey(parts ...string) string {
 	key := strings.Join(parts, "/")
 	hash := sha256.Sum256([]byte(key))
-	return fmt.Sprintf("%x", hash)
+	return hex.EncodeToString(hash[:])
 }
 
-func (c *CacheClient) loadCache(key string, v any) bool {
+func (c *CacheClient) loadCache(ctx context.Context, key string, v any) bool {
 	path := filepath.Join(c.cacheDir, key+".json")
 
 	file, err := os.Open(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			c.logger.DebugContext(context.Background(), "failed to open cache file", "error", err, "path", path)
+			c.logger.DebugContext(ctx, "failed to open cache file", "error", err, "path", path)
 		}
 		return false
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			c.logger.DebugContext(context.Background(), "failed to close cache file", "error", closeErr, "path", path)
+			c.logger.DebugContext(ctx, "failed to close cache file", "error", closeErr, "path", path)
 		}
 	}()
 
 	if err := json.NewDecoder(file).Decode(v); err != nil {
-		c.logger.WarnContext(context.Background(), "failed to decode cache file", "error", err, "path", path)
+		c.logger.WarnContext(ctx, "failed to decode cache file", "error", err, "path", path)
 		return false
 	}
 
 	return true
 }
 
-func (c *CacheClient) saveCache(key string, v any) error {
+func (c *CacheClient) saveCache(ctx context.Context, key string, v any) error {
 	path := filepath.Join(c.cacheDir, key+".json")
 
 	tmpPath := path + ".tmp"
-	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cacheFilePerms)
 	if err != nil {
 		return fmt.Errorf("creating cache file: %w", err)
 	}
@@ -717,24 +774,24 @@ func (c *CacheClient) saveCache(key string, v any) error {
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(v); err != nil {
 		if closeErr := file.Close(); closeErr != nil {
-			c.logger.DebugContext(context.Background(), "failed to close temp file", "error", closeErr, "path", tmpPath)
+			c.logger.DebugContext(ctx, "failed to close temp file", "error", closeErr, "path", tmpPath)
 		}
 		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			c.logger.DebugContext(context.Background(), "failed to remove temp file", "error", removeErr, "path", tmpPath)
+			c.logger.DebugContext(ctx, "failed to remove temp file", "error", removeErr, "path", tmpPath)
 		}
 		return fmt.Errorf("encoding cache data: %w", err)
 	}
 
 	if err := file.Close(); err != nil {
 		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			c.logger.DebugContext(context.Background(), "failed to remove temp file", "error", removeErr, "path", tmpPath)
+			c.logger.DebugContext(ctx, "failed to remove temp file", "error", removeErr, "path", tmpPath)
 		}
 		return fmt.Errorf("closing cache file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
 		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			c.logger.DebugContext(context.Background(), "failed to remove temp file", "error", removeErr, "path", tmpPath)
+			c.logger.DebugContext(ctx, "failed to remove temp file", "error", removeErr, "path", tmpPath)
 		}
 		return fmt.Errorf("renaming cache file: %w", err)
 	}

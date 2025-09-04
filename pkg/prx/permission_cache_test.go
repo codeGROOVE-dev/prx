@@ -14,7 +14,7 @@ func TestPermissionCache(t *testing.T) {
 		}
 
 		// Test get on empty cache
-		perm, found := cache.get("owner", "repo", "user1")
+		_, found := cache.get("owner", "repo", "user1")
 		if found {
 			t.Error("expected not found in empty cache")
 		}
@@ -25,7 +25,7 @@ func TestPermissionCache(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		perm, found = cache.get("owner", "repo", "user1")
+		perm, found := cache.get("owner", "repo", "user1")
 		if !found {
 			t.Error("expected to find cached permission")
 		}
@@ -34,7 +34,7 @@ func TestPermissionCache(t *testing.T) {
 		}
 
 		// Test different user
-		perm, found = cache.get("owner", "repo", "user2")
+		_, found = cache.get("owner", "repo", "user2")
 		if found {
 			t.Error("expected not found for different user")
 		}

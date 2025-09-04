@@ -3,6 +3,7 @@ package prx
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 const maxPerPage = 100
@@ -43,7 +44,7 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 		event := Event{
 			Kind:      "commit",
 			Timestamp: commit.Commit.Author.Date,
-			Body:      truncate(commit.Commit.Message, 256),
+			Body:      truncate(commit.Commit.Message),
 		}
 
 		if commit.Author != nil {
@@ -56,7 +57,6 @@ func (c *Client) commits(ctx context.Context, owner, repo string, prNumber int) 
 		events = append(events, event)
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("fetching commits: %w", err)
 	}
@@ -72,7 +72,7 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, prNumber)
 
 	err := paginate(ctx, c, path, func(comment *githubComment) error {
-		body := truncate(comment.Body, 256)
+		body := truncate(comment.Body)
 		event := Event{
 			Kind:        "comment",
 			Timestamp:   comment.CreatedAt,
@@ -85,7 +85,6 @@ func (c *Client) comments(ctx context.Context, owner, repo string, prNumber int)
 		events = append(events, event)
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("fetching comments: %w", err)
 	}
@@ -105,7 +104,7 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 			return nil
 		}
 
-		body := truncate(review.Body, 256)
+		body := truncate(review.Body)
 		event := Event{
 			Kind:        "review",
 			Timestamp:   review.SubmittedAt,
@@ -119,7 +118,6 @@ func (c *Client) reviews(ctx context.Context, owner, repo string, prNumber int) 
 		events = append(events, event)
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("fetching reviews: %w", err)
 	}
@@ -135,7 +133,7 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments", owner, repo, prNumber)
 
 	err := paginate(ctx, c, path, func(comment *githubReviewComment) error {
-		body := truncate(comment.Body, 256)
+		body := truncate(comment.Body)
 		event := Event{
 			Kind:        "review_comment",
 			Timestamp:   comment.CreatedAt,
@@ -148,7 +146,6 @@ func (c *Client) reviewComments(ctx context.Context, owner, repo string, prNumbe
 		events = append(events, event)
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("fetching review comments: %w", err)
 	}
@@ -169,7 +166,6 @@ func (c *Client) timelineEvents(ctx context.Context, owner, repo string, prNumbe
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("fetching timeline events: %w", err)
 	}
@@ -214,7 +210,7 @@ func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, ite
 		}
 		event.Target = item.Milestone.Title
 	case "review_requested", "review_request_removed":
-		if item.RequestedReviewer != nil {
+		if item.RequestedReviewer != nil { //nolint:gocritic // This checks different conditions, not suitable for switch
 			event.Target = item.RequestedReviewer.Login
 			event.TargetIsBot = isBot(item.RequestedReviewer)
 		} else if item.RequestedTeam.Name != "" {
@@ -224,6 +220,9 @@ func (c *Client) parseTimelineEvent(ctx context.Context, owner, repo string, ite
 		}
 	case "mentioned":
 		event.Body = "User was mentioned"
+	default:
+		// Unknown event type, ignore
+		return nil
 	}
 
 	return event
@@ -265,39 +264,74 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 	return events, nil
 }
 
-func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]Event, error) {
+func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPullRequest) ([]Event, string, error) {
 	c.logger.DebugContext(ctx, "fetching check runs", "owner", owner, "repo", repo, "sha", pr.Head.SHA)
 
 	var events []Event
 
 	if pr.Head.SHA == "" {
 		c.logger.DebugContext(ctx, "no SHA available for check runs")
-		return events, nil
+		return events, TestStateNone, nil
 	}
 
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=%d", owner, repo, pr.Head.SHA, maxPerPage)
 	var checkRuns githubCheckRuns
 	if _, err := c.github.get(ctx, path, &checkRuns); err != nil {
-		return nil, fmt.Errorf("fetching check runs: %w", err)
+		return nil, TestStateNone, fmt.Errorf("fetching check runs: %w", err)
 	}
 
-	for _, checkRun := range checkRuns.CheckRuns {
-		timestamp := checkRun.StartedAt
-		if !checkRun.CompletedAt.IsZero() {
-			timestamp = checkRun.CompletedAt
-		}
+	// Track current states for test state calculation
+	hasQueued := false
+	hasRunning := false
+	hasFailing := false
+	hasPassing := false
 
+	for _, checkRun := range checkRuns.CheckRuns {
 		var actor string
 		if checkRun.App.Owner != nil {
 			actor = checkRun.App.Owner.Login
+		}
+
+		// Determine the current status/outcome for the check run
+		var outcome string
+		var timestamp time.Time
+		if !checkRun.CompletedAt.IsZero() { //nolint:gocritic // This checks time fields and different conditions, not suitable for switch
+			// Test has completed
+			outcome = checkRun.Conclusion // "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
+			timestamp = checkRun.CompletedAt
+
+			// Track state for completed tests
+			switch outcome {
+			case "success":
+				hasPassing = true
+			case "failure", "timed_out", "action_required":
+				hasFailing = true
+			default:
+				// Other conclusions like "neutral", "cancelled", "skipped" don't affect test state
+			}
+		} else if checkRun.Status == "queued" {
+			// Test is queued
+			outcome = "queued"
+			hasQueued = true
+			timestamp = checkRun.StartedAt
+			// If we don't have a timestamp, we'll use zero time which will sort first
+		} else if checkRun.Status == "in_progress" {
+			// Test is running
+			outcome = "in_progress"
+			hasRunning = true
+			timestamp = checkRun.StartedAt
+			// If we don't have a timestamp, we'll use zero time which will sort first
+		} else {
+			// Unknown status, skip
+			continue
 		}
 
 		event := Event{
 			Kind:      "check_run",
 			Timestamp: timestamp,
 			Actor:     actor,
-			Outcome:   checkRun.Conclusion, // "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
-			Body:      checkRun.Name,       // Store check run name in body field
+			Outcome:   outcome,
+			Body:      checkRun.Name, // Store check run name in body field
 		}
 		// GitHub Apps are always considered bots
 		if checkRun.App.Owner != nil {
@@ -306,6 +340,20 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 		events = append(events, event)
 	}
 
-	c.logger.DebugContext(ctx, "fetched check runs", "count", len(events))
-	return events, nil
+	// Calculate overall test state based on current API data
+	var testState string
+	if hasFailing { //nolint:gocritic // This checks priority order of boolean flags, switch would be less readable
+		testState = TestStateFailing
+	} else if hasRunning {
+		testState = TestStateRunning
+	} else if hasQueued {
+		testState = TestStateQueued
+	} else if hasPassing {
+		testState = TestStatePassing
+	} else {
+		testState = TestStateNone
+	}
+
+	c.logger.DebugContext(ctx, "fetched check runs", "count", len(events), "test_state", testState)
+	return events, testState, nil
 }
