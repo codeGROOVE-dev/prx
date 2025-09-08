@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/ready-to-review/prx/pkg/prx"
+	"github.com/codeGROOVE-dev/prx/pkg/prx"
 )
 
 func Example() {
