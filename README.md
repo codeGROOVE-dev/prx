@@ -114,7 +114,7 @@ type PullRequest struct {
     RequestedReviewers []string    `json:"requested_reviewers,omitempty"`
     Labels            []string     `json:"labels,omitempty"`
     TestSummary       *TestSummary   `json:"test_summary,omitempty"`
-    StatusSummary     *StatusSummary `json:"status_summary,omitempty"`
+    CheckSummary      *CheckSummary  `json:"check_summary,omitempty"`
 }
 
 type TestSummary struct {
@@ -123,7 +123,7 @@ type TestSummary struct {
     Pending int `json:"pending"`
 }
 
-type StatusSummary struct {
+type CheckSummary struct {
     Success int `json:"success"`
     Failure int `json:"failure"`
     Pending int `json:"pending"`

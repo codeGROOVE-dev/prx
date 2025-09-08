@@ -214,328 +214,76 @@ func (c *Client) PullRequestWithReferenceTime(
 }
 
 func (c *Client) pullRequestWithCache(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
-	// Create temporary CacheClient to use cached fetchers
-	cacheClient := &CacheClient{
-		Client:   c,
-		cacheDir: c.cacheDir,
-	}
-	c.logger.InfoContext(ctx, "fetching pull request with cache",
-		"owner", owner,
-		"repo", repo,
-		"pr", prNumber,
-		"reference_time", referenceTime,
-	)
-	pr, err := cacheClient.cachedPullRequest(ctx, owner, repo, prNumber, referenceTime)
-	if err != nil {
-		return nil, fmt.Errorf("fetching pull request: %w", err)
-	}
-	var events []Event
-	pullRequest := c.buildPullRequestWithMetadata(ctx, pr, owner, repo)
-	prOpenedEvent := Event{
-		Kind:        "pr_opened",
-		Timestamp:   pr.CreatedAt,
-		Actor:       pr.User.Login,
-		Bot:         isBot(pr.User),
-		WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
-	}
-	events = append(events, prOpenedEvent)
-	prUpdatedAt := pr.UpdatedAt
-	// Fetch all event types in parallel using cached fetchers
-	results := make(chan fetchResult, maxConcurrentRequests)
-	go func() {
-		e, err := cacheClient.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
-	}()
-	// First, fetch required checks synchronously since other calls depend on it
-	requiredChecks := c.requiredStatusChecks(ctx, owner, repo, pr)
-	go func() {
-		e, err := cacheClient.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
-	}()
-	go func() {
-		e, testState, err := cacheClient.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
-	}()
-	// Collect results
-	var errs []error
-	var testStateFromAPI string
-	numGoroutines := numFetchGoroutines
-	for range numGoroutines {
-		r := <-results
-		if r.err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
-			errs = append(errs, r.err)
-		} else {
-			events = append(events, r.events...)
-			// Capture test state from check runs
-			if r.name == "check runs" && r.testState != "" {
-				testStateFromAPI = r.testState
-			}
-		}
-	}
-	// If we have no events at all and errors occurred, return the first error
-	if len(events) == 0 && len(errs) > 0 {
-		return nil, fmt.Errorf("failed to fetch any events: %w", errs[0])
-	}
-	// Log a warning if we had partial failures
-	if len(errs) > 0 {
-		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data",
-			"error_count", len(errs),
-			"event_count", len(events))
-	}
-	if pr.Merged {
-		mergedEvent := Event{
-			Kind:      "pr_merged",
-			Timestamp: pr.MergedAt,
-		}
-		if pr.MergedBy != nil {
-			mergedEvent.Actor = pr.MergedBy.Login
-			mergedEvent.Bot = isBot(pr.MergedBy)
-		} else {
-			mergedEvent.Actor = "unknown"
-		}
-		events = append(events, mergedEvent)
-	} else if pr.State == "closed" {
-		closedEvent := Event{
-			Kind:        "pr_closed",
-			Timestamp:   pr.ClosedAt,
-			Actor:       pr.User.Login,
-			Bot:         isBot(pr.User),
-			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
-		}
-		events = append(events, closedEvent)
-	}
-	// Filter events to exclude non-failure status_check events
-	events = filterEvents(events)
-	// Sort events by timestamp
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
-	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
-	upgradeWriteAccess(events)
-	// Use test state from API (calculated from current check run statuses)
-	pullRequest.TestState = testStateFromAPI
-	pullRequest.StatusSummary = calculateStatusSummary(events, requiredChecks)
-	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
-	// Fix consistency issues between related fields
-	// Fix test_state to be consistent with status_summary
-	switch {
-	case pullRequest.StatusSummary.Failure > 0:
-		pullRequest.TestState = TestStateFailing
-	case pullRequest.StatusSummary.Pending > 0:
-		pullRequest.TestState = TestStatePending
-	case pullRequest.StatusSummary.Success > 0:
-		pullRequest.TestState = TestStatePassing
-	default:
-		pullRequest.TestState = TestStateNone
-	}
-	// Fix mergeable to be consistent with mergeable_state
-	// If mergeable_state indicates blocked/dirty/unstable, mergeable should be false
-	if pullRequest.MergeableState == "blocked" || pullRequest.MergeableState == "dirty" || pullRequest.MergeableState == "unstable" {
-		falseVal := false
-		pullRequest.Mergeable = &falseVal
-	}
-	// Add human-readable description for mergeable state
-	switch pullRequest.MergeableState {
-	case "blocked":
-		// Determine what's actually blocking the PR
-		hasApprovals := pullRequest.ApprovalSummary.ApprovalsWithWriteAccess > 0
-		hasFailingChecks := pullRequest.StatusSummary.Failure > 0
-		hasPendingChecks := pullRequest.StatusSummary.Pending > 0
-		switch {
-		case !hasApprovals && !hasFailingChecks:
-			if hasPendingChecks {
-				pullRequest.MergeableStateDescription = "PR requires approval and has pending status checks"
-			} else {
-				pullRequest.MergeableStateDescription = "PR requires approval"
-			}
-		case hasFailingChecks:
-			if !hasApprovals {
-				pullRequest.MergeableStateDescription = "PR has failing status checks and requires approval"
-			} else {
-				pullRequest.MergeableStateDescription = "PR is blocked by failing status checks"
-			}
-		case hasPendingChecks:
-			pullRequest.MergeableStateDescription = "PR is blocked by pending status checks"
-		default:
-			pullRequest.MergeableStateDescription = "PR is blocked by required status checks, reviews, or branch protection rules"
-		}
-	case "dirty":
-		pullRequest.MergeableStateDescription = "PR has merge conflicts that need to be resolved"
-	case "unstable":
-		pullRequest.MergeableStateDescription = "PR is mergeable but status checks are failing"
-	case "clean":
-		pullRequest.MergeableStateDescription = "PR is ready to merge"
-	case "unknown":
-		pullRequest.MergeableStateDescription = "Merge status is being calculated"
-	case "draft":
-		pullRequest.MergeableStateDescription = "PR is in draft state"
-	default:
-		pullRequest.MergeableStateDescription = ""
-	}
-	c.logger.InfoContext(ctx, "successfully fetched pull request with cache",
-		"owner", owner,
-		"repo", repo,
-		"pr", prNumber,
-		"event_count", len(events),
-		"cache_hits", len(events)-len(errs),
-	)
-	return &PullRequestData{
-		PullRequest: pullRequest,
-		Events:      events,
-	}, nil
+	return c.pullRequestImpl(ctx, owner, repo, prNumber, &referenceTime)
 }
 
 func (c *Client) pullRequestNonCached(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
-	c.logger.InfoContext(ctx, "fetching pull request",
-		"owner", owner,
-		"repo", repo,
-		"pr", prNumber,
-	)
-	var events []Event
-	// Fetch the pull request to get basic info
-	var pr githubPullRequest
-	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
-	if _, err := c.github.get(ctx, path, &pr); err != nil {
-		c.logger.ErrorContext(ctx, "failed to fetch pull request", "error", err)
+	return c.pullRequestImpl(ctx, owner, repo, prNumber, nil)
+}
+
+// pullRequestImpl is the unified implementation that handles both cached and non-cached requests.
+func (c *Client) pullRequestImpl(ctx context.Context, owner, repo string, prNumber int, referenceTime *time.Time) (*PullRequestData, error) {
+	useCache := c.cacheDir != "" && referenceTime != nil
+	logMsg := "fetching pull request"
+	if useCache {
+		logMsg = "fetching pull request with cache"
+	}
+	c.logger.InfoContext(ctx, logMsg, "owner", owner, "repo", repo, "pr", prNumber)
+	// Fetch the pull request
+	var pr *githubPullRequest
+	var err error
+	if useCache {
+		cacheClient := &CacheClient{Client: c, cacheDir: c.cacheDir}
+		pr, err = cacheClient.cachedPullRequest(ctx, owner, repo, prNumber, *referenceTime)
+	} else {
+		var prData githubPullRequest
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
+		if _, err := c.github.get(ctx, path, &prData); err != nil {
+			c.logger.ErrorContext(ctx, "failed to fetch pull request", "error", err)
+			return nil, fmt.Errorf("fetching pull request: %w", err)
+		}
+		pr = &prData
+		c.logger.InfoContext(ctx, "pull request metadata",
+			"mergeable", pr.Mergeable,
+			"mergeable_state", pr.MergeableState,
+			"draft", pr.Draft,
+			"additions", pr.Additions,
+			"deletions", pr.Deletions,
+			"changed_files", pr.ChangedFiles,
+			"pr", prNumber)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("fetching pull request: %w", err)
 	}
-	c.logger.InfoContext(ctx, "pull request metadata",
-		"mergeable", pr.Mergeable,
-		"mergeable_state", pr.MergeableState,
-		"draft", pr.Draft,
-		"additions", pr.Additions,
-		"deletions", pr.Deletions,
-		"changed_files", pr.ChangedFiles,
-		"pr", prNumber)
-	pullRequest := c.buildPullRequestWithMetadata(ctx, &pr, owner, repo)
-	prOpenedEvent := c.createPROpenedEvent(ctx, &pr, owner, repo)
-	events = append(events, prOpenedEvent)
-	// Fetch all event types in parallel
-	results := make(chan fetchResult, maxConcurrentRequests)
-	go func() {
-		e, err := c.commits(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
-	}()
-	go func() {
-		e, err := c.comments(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
-	}()
-	go func() {
-		e, err := c.reviews(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
-	}()
-	go func() {
-		e, err := c.reviewComments(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
-	}()
-	go func() {
-		e, err := c.timelineEvents(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
-	}()
-	// First, fetch required checks synchronously since other calls depend on it
-	requiredChecks := c.requiredStatusChecks(ctx, owner, repo, &pr)
-	go func() {
-		e, err := c.statusChecks(ctx, owner, repo, &pr, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
-	}()
-	go func() {
-		e, testState, err := c.checkRuns(ctx, owner, repo, &pr, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
-	}()
-	// Collect results
-	var errs []error
+
+	pullRequest := c.buildPullRequestWithMetadata(ctx, pr, owner, repo)
+	events := []Event{c.createPROpenedEvent(ctx, pr, owner, repo)}
+	requiredChecks := c.requiredStatusChecks(ctx, owner, repo, pr)
+
+	// Fetch all events
+	var fetchedEvents []Event
 	var testStateFromAPI string
-	numGoroutines := numFetchGoroutines
-	for range numGoroutines {
-		r := <-results
-		if r.err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
-			errs = append(errs, r.err)
-		} else {
-			events = append(events, r.events...)
-			// Capture test state from check runs
-			if r.name == "check runs" && r.testState != "" {
-				testStateFromAPI = r.testState
-			}
-		}
+	if useCache {
+		cacheClient := &CacheClient{Client: c, cacheDir: c.cacheDir}
+		fetchedEvents, testStateFromAPI, err = c.fetchAllEventsCached(ctx, cacheClient, owner, repo, prNumber, pr.UpdatedAt, pr, requiredChecks)
+	} else {
+		fetchedEvents, testStateFromAPI, err = c.fetchAllEventsNonCached(ctx, owner, repo, prNumber, pr, requiredChecks)
 	}
-	// If we have no events at all and errors occurred, return the first error
-	if len(events) == 0 && len(errs) > 0 {
-		return nil, fmt.Errorf("failed to fetch any events: %w", errs[0])
+	if err != nil {
+		return nil, err
 	}
-	// Log a warning if we had partial failures
-	if len(errs) > 0 {
-		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data",
-			"error_count", len(errs),
-			"event_count", len(events))
+	events = append(events, fetchedEvents...)
+
+	events = c.addCloseEvents(ctx, pr, owner, repo, events)
+	events = processEvents(events)
+	finalizePullRequest(&pullRequest, events, requiredChecks, testStateFromAPI)
+
+	logMsg = "successfully fetched pull request"
+	if useCache {
+		logMsg = "successfully fetched pull request with cache"
 	}
-	if pr.Merged {
-		mergedEvent := Event{
-			Kind:      "pr_merged",
-			Timestamp: pr.MergedAt,
-		}
-		if pr.MergedBy != nil {
-			mergedEvent.Actor = pr.MergedBy.Login
-			mergedEvent.Bot = isBot(pr.MergedBy)
-		} else {
-			mergedEvent.Actor = "unknown"
-		}
-		events = append(events, mergedEvent)
-	} else if pr.State == "closed" {
-		closedEvent := Event{
-			Kind:      "pr_closed",
-			Timestamp: pr.ClosedAt,
-		}
-		if pr.User != nil {
-			closedEvent.Actor = pr.User.Login
-			closedEvent.Bot = isBot(pr.User)
-			closedEvent.WriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-		} else {
-			closedEvent.Actor = "unknown"
-			closedEvent.Bot = false
-			closedEvent.WriteAccess = WriteAccessNA
-		}
-		events = append(events, closedEvent)
-	}
-	// Filter events to exclude non-failure status_check events
-	events = filterEvents(events)
-	// Sort events by timestamp
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
-	// Upgrade write_access from likely (1) to definitely (2) for actors who performed write-access-requiring actions
-	upgradeWriteAccess(events)
-	// Use test state from API (calculated from current check run statuses)
-	pullRequest.TestState = testStateFromAPI
-	pullRequest.StatusSummary = calculateStatusSummary(events, requiredChecks)
-	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
-	c.logger.InfoContext(ctx, "successfully fetched pull request",
-		"owner", owner,
-		"repo", repo,
-		"pr", prNumber,
-		"event_count", len(events),
-	)
-	return &PullRequestData{
-		PullRequest: pullRequest,
-		Events:      events,
-	}, nil
+	c.logger.InfoContext(ctx, logMsg, "owner", owner, "repo", repo, "pr", prNumber, "event_count", len(events))
+	return &PullRequestData{PullRequest: pullRequest, Events: events}, nil
 }
 
 // buildPullRequestWithMetadata creates a PullRequest object with all metadata populated.
@@ -588,4 +336,236 @@ func (c *Client) createPROpenedEvent(ctx context.Context, pr *githubPullRequest,
 		prOpenedEvent.WriteAccess = WriteAccessNA
 	}
 	return prOpenedEvent
+}
+
+// fetchAllEventsNonCached fetches all event types in parallel using direct API calls.
+func (c *Client) fetchAllEventsNonCached(
+	ctx context.Context, owner, repo string, prNumber int, pr *githubPullRequest, requiredChecks []string,
+) ([]Event, string, error) {
+	results := make(chan fetchResult, maxConcurrentRequests)
+	go func() {
+		e, err := c.commits(ctx, owner, repo, prNumber)
+		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
+	}()
+	go func() {
+		e, err := c.comments(ctx, owner, repo, prNumber)
+		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
+	}()
+	go func() {
+		e, err := c.reviews(ctx, owner, repo, prNumber)
+		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
+	}()
+	go func() {
+		e, err := c.reviewComments(ctx, owner, repo, prNumber)
+		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
+	}()
+	go func() {
+		e, err := c.timelineEvents(ctx, owner, repo, prNumber)
+		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
+	}()
+	go func() {
+		e, err := c.statusChecks(ctx, owner, repo, pr, requiredChecks)
+		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
+	}()
+	go func() {
+		e, testState, err := c.checkRuns(ctx, owner, repo, pr, requiredChecks)
+		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
+	}()
+
+	var events []Event
+	var errs []error
+	var testStateFromAPI string
+	for range numFetchGoroutines {
+		r := <-results
+		if r.err != nil {
+			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
+			errs = append(errs, r.err)
+		} else {
+			events = append(events, r.events...)
+			if r.name == "check runs" && r.testState != "" {
+				testStateFromAPI = r.testState
+			}
+		}
+	}
+
+	if len(events) == 0 && len(errs) > 0 {
+		return nil, "", fmt.Errorf("failed to fetch any events: %w", errs[0])
+	}
+	if len(errs) > 0 {
+		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data", "error_count", len(errs), "event_count", len(events))
+	}
+	return events, testStateFromAPI, nil
+}
+
+// fetchAllEventsCached fetches all event types in parallel using cached fetchers.
+func (c *Client) fetchAllEventsCached(
+	ctx context.Context, cacheClient *CacheClient, owner, repo string, prNumber int,
+	prUpdatedAt time.Time, pr *githubPullRequest, requiredChecks []string,
+) ([]Event, string, error) {
+	results := make(chan fetchResult, maxConcurrentRequests)
+	go func() {
+		e, err := cacheClient.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
+	}()
+	go func() {
+		e, err := cacheClient.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
+	}()
+	go func() {
+		e, err := cacheClient.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
+	}()
+	go func() {
+		e, err := cacheClient.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
+	}()
+	go func() {
+		e, err := cacheClient.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
+		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
+	}()
+	go func() {
+		e, err := cacheClient.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt, requiredChecks)
+		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
+	}()
+	go func() {
+		e, testState, err := cacheClient.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt, requiredChecks)
+		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
+	}()
+
+	var events []Event
+	var errs []error
+	var testStateFromAPI string
+	for range numFetchGoroutines {
+		r := <-results
+		if r.err != nil {
+			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
+			errs = append(errs, r.err)
+		} else {
+			events = append(events, r.events...)
+			if r.name == "check runs" && r.testState != "" {
+				testStateFromAPI = r.testState
+			}
+		}
+	}
+
+	if len(events) == 0 && len(errs) > 0 {
+		return nil, "", fmt.Errorf("failed to fetch any events: %w", errs[0])
+	}
+	if len(errs) > 0 {
+		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data", "error_count", len(errs), "event_count", len(events))
+	}
+	return events, testStateFromAPI, nil
+}
+
+// addCloseEvents adds merged/closed events if applicable.
+func (c *Client) addCloseEvents(ctx context.Context, pr *githubPullRequest, owner, repo string, events []Event) []Event {
+	if pr.Merged {
+		mergedEvent := Event{Kind: "pr_merged", Timestamp: pr.MergedAt}
+		if pr.MergedBy != nil {
+			mergedEvent.Actor = pr.MergedBy.Login
+			mergedEvent.Bot = isBot(pr.MergedBy)
+		} else {
+			mergedEvent.Actor = "unknown"
+		}
+		events = append(events, mergedEvent)
+	} else if pr.State == "closed" {
+		closedEvent := Event{
+			Kind:        "pr_closed",
+			Timestamp:   pr.ClosedAt,
+			Actor:       pr.User.Login,
+			Bot:         isBot(pr.User),
+			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
+		}
+		events = append(events, closedEvent)
+	}
+	return events
+}
+
+// processEvents filters, sorts, and upgrades write access for events.
+func processEvents(events []Event) []Event {
+	events = filterEvents(events)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.Before(events[j].Timestamp)
+	})
+	upgradeWriteAccess(events)
+	return events
+}
+
+// finalizePullRequest applies final calculations and consistency fixes.
+func finalizePullRequest(pullRequest *PullRequest, events []Event, requiredChecks []string, testStateFromAPI string) {
+	pullRequest.TestState = testStateFromAPI
+	pullRequest.CheckSummary = calculateCheckSummary(events, requiredChecks)
+	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
+
+	fixTestState(pullRequest)
+	fixMergeable(pullRequest)
+	setMergeableDescription(pullRequest)
+}
+
+// fixTestState ensures test_state is consistent with check_summary.
+func fixTestState(pullRequest *PullRequest) {
+	switch {
+	case pullRequest.CheckSummary.Failure > 0:
+		pullRequest.TestState = TestStateFailing
+	case pullRequest.CheckSummary.Pending > 0:
+		pullRequest.TestState = TestStatePending
+	case pullRequest.CheckSummary.Success > 0:
+		pullRequest.TestState = TestStatePassing
+	default:
+		pullRequest.TestState = TestStateNone
+	}
+}
+
+// fixMergeable ensures mergeable is consistent with mergeable_state.
+func fixMergeable(pullRequest *PullRequest) {
+	if pullRequest.MergeableState == "blocked" || pullRequest.MergeableState == "dirty" || pullRequest.MergeableState == "unstable" {
+		falseVal := false
+		pullRequest.Mergeable = &falseVal
+	}
+}
+
+// setMergeableDescription adds human-readable description for mergeable state.
+func setMergeableDescription(pullRequest *PullRequest) {
+	switch pullRequest.MergeableState {
+	case "blocked":
+		setBlockedDescription(pullRequest)
+	case "dirty":
+		pullRequest.MergeableStateDescription = "PR has merge conflicts that need to be resolved"
+	case "unstable":
+		pullRequest.MergeableStateDescription = "PR is mergeable but status checks are failing"
+	case "clean":
+		pullRequest.MergeableStateDescription = "PR is ready to merge"
+	case "unknown":
+		pullRequest.MergeableStateDescription = "Merge status is being calculated"
+	case "draft":
+		pullRequest.MergeableStateDescription = "PR is in draft state"
+	default:
+		pullRequest.MergeableStateDescription = ""
+	}
+}
+
+// setBlockedDescription determines what's blocking the PR and sets appropriate description.
+func setBlockedDescription(pullRequest *PullRequest) {
+	hasApprovals := pullRequest.ApprovalSummary.ApprovalsWithWriteAccess > 0
+	hasFailingChecks := pullRequest.CheckSummary.Failure > 0
+	hasPendingChecks := pullRequest.CheckSummary.Pending > 0
+
+	switch {
+	case !hasApprovals && !hasFailingChecks:
+		if hasPendingChecks {
+			pullRequest.MergeableStateDescription = "PR requires approval and has pending status checks"
+		} else {
+			pullRequest.MergeableStateDescription = "PR requires approval"
+		}
+	case hasFailingChecks:
+		if !hasApprovals {
+			pullRequest.MergeableStateDescription = "PR has failing status checks and requires approval"
+		} else {
+			pullRequest.MergeableStateDescription = "PR is blocked by failing status checks"
+		}
+	case hasPendingChecks:
+		pullRequest.MergeableStateDescription = "PR is blocked by pending status checks"
+	default:
+		pullRequest.MergeableStateDescription = "PR is blocked by required status checks, reviews, or branch protection rules"
+	}
 }
