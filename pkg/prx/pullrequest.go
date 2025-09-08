@@ -21,7 +21,7 @@ type PullRequest struct {
 	ClosedAt                  *time.Time       `json:"closed_at,omitempty"`
 	Mergeable                 *bool            `json:"mergeable"`
 	ApprovalSummary           *ApprovalSummary `json:"approval_summary,omitempty"`
-	StatusSummary             *StatusSummary   `json:"status_summary,omitempty"`
+	CheckSummary              *CheckSummary    `json:"check_summary,omitempty"`
 	MergedAt                  *time.Time       `json:"merged_at,omitempty"`
 	MergeableState            string           `json:"mergeable_state"`
 	MergeableStateDescription string           `json:"mergeable_state_description,omitempty"`
@@ -44,8 +44,8 @@ type PullRequest struct {
 	Draft                     bool             `json:"draft"`
 }
 
-// StatusSummary aggregates all status checks and check runs.
-type StatusSummary struct {
+// CheckSummary aggregates all status checks and check runs.
+type CheckSummary struct {
 	Success int `json:"success"` // Checks that completed successfully
 	Failure int `json:"failure"` // Checks that failed, errored, or require action
 	Pending int `json:"pending"` // Checks that are queued or in progress

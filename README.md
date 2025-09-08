@@ -5,7 +5,7 @@ A Go library for efficiently retrieving rich details about GitHub pull requests,
 ## Installation
 
 ```bash
-go get github.com/ready-to-review/prx
+go get github.com/codeGROOVE-dev/prx
 ```
 
 ## CLI Usage
@@ -14,7 +14,7 @@ The repository includes a command-line tool that outputs pull request data as JS
 
 ```bash
 # Install the CLI tool
-go install github.com/ready-to-review/prx/cmd/prx@latest
+go install github.com/codeGROOVE-dev/prx/cmd/prx@latest
 
 # Authenticate with GitHub CLI (required)
 gh auth login
@@ -50,7 +50,7 @@ import (
     "log"
     "os"
 
-    "github.com/ready-to-review/prx/pkg/prx"
+    "github.com/codeGROOVE-dev/prx/pkg/prx"
 )
 
 func main() {
@@ -114,7 +114,7 @@ type PullRequest struct {
     RequestedReviewers []string    `json:"requested_reviewers,omitempty"`
     Labels            []string     `json:"labels,omitempty"`
     TestSummary       *TestSummary   `json:"test_summary,omitempty"`
-    StatusSummary     *StatusSummary `json:"status_summary,omitempty"`
+    CheckSummary      *CheckSummary  `json:"check_summary,omitempty"`
 }
 
 type TestSummary struct {
@@ -123,7 +123,7 @@ type TestSummary struct {
     Pending int `json:"pending"`
 }
 
-type StatusSummary struct {
+type CheckSummary struct {
     Success int `json:"success"`
     Failure int `json:"failure"`
     Pending int `json:"pending"`

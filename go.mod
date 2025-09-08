@@ -1,4 +1,4 @@
-module github.com/ready-to-review/prx
+module github.com/codeGROOVE-dev/prx
 
 go 1.23.4
 

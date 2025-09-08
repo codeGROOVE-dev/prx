@@ -98,8 +98,8 @@ func buildPullRequest(pr *githubPullRequest) PullRequest {
 	return result
 }
 
-func calculateStatusSummary(events []Event, requiredChecks []string) *StatusSummary {
-	summary := &StatusSummary{}
+func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummary {
+	summary := &CheckSummary{}
 	checkStates := make(map[string]string)
 
 	for _, event := range events {

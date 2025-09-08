@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ready-to-review/prx/pkg/prx"
+	"github.com/codeGROOVE-dev/prx/pkg/prx"
 )
 
 const (
