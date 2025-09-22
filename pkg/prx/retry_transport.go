@@ -81,8 +81,25 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				"url", req.URL.String(),
 				"elapsed", elapsed)
 
+			// Check if this is a retryable error
+			shouldRetry := false
+			retryReason := ""
+
 			// Retry on 429 (rate limit) or 5xx server errors
 			if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
+				shouldRetry = true
+				retryReason = "retryable status code"
+			}
+
+			// GitHub returns 403 for rate limit errors - check headers to confirm
+			if resp.StatusCode == http.StatusForbidden {
+				if remaining := resp.Header.Get("X-Ratelimit-Remaining"); remaining == "0" {
+					shouldRetry = true
+					retryReason = "GitHub rate limit exceeded"
+				}
+			}
+
+			if shouldRetry {
 				bodyBytes, readErr := io.ReadAll(resp.Body)
 				if readErr != nil {
 					slog.DebugContext(req.Context(), "failed to read response body for retry", "error", readErr)
@@ -95,7 +112,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				slog.InfoContext(req.Context(), "HTTP request will be retried",
 					"status", resp.StatusCode,
 					"url", req.URL.String(),
-					"reason", "retryable status code")
+					"reason", retryReason)
 				lastErr = &retryableError{StatusCode: resp.StatusCode}
 				return lastErr
 			}
