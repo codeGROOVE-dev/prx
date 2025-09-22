@@ -19,6 +19,12 @@ const (
 	maxResponseSize = 10 * 1024 * 1024 // 10MB
 	// maxErrorBodySize limits error response body reading for debugging.
 	maxErrorBodySize = 1024
+	// tokenPreviewPrefixLen is the number of characters to show at the start of a masked token.
+	tokenPreviewPrefixLen = 4
+	// tokenPreviewSuffixLen is the number of characters to show at the end of a masked token.
+	tokenPreviewSuffixLen = 4
+	// tokenPreviewMinLen is the minimum token length to show a preview.
+	tokenPreviewMinLen = 8
 )
 
 // GitHubAPIError represents an error response from the GitHub API.
@@ -43,7 +49,6 @@ type githubClient struct {
 // doRequest performs the common HTTP request logic for GitHub API calls.
 func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *githubResponse, error) {
 	apiURL := c.api + path
-	slog.InfoContext(ctx, "GitHub API request starting", "method", "GET", "url", apiURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)
 	if err != nil {
@@ -51,6 +56,25 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	// Log request details (mask token for security)
+	tokenPreview := ""
+	if c.token != "" {
+		if len(c.token) > tokenPreviewMinLen {
+			tokenPreview = c.token[:tokenPreviewPrefixLen] + "..." + c.token[len(c.token)-tokenPreviewSuffixLen:]
+		} else {
+			tokenPreview = "***"
+		}
+	}
+
+	slog.InfoContext(ctx, "GitHub API request starting",
+		"method", "GET",
+		"url", apiURL,
+		"headers", map[string]string{
+			"Authorization": "Bearer " + tokenPreview,
+			"Accept":        req.Header.Get("Accept"),
+			"User-Agent":    req.Header.Get("User-Agent"),
+		})
 
 	start := time.Now()
 	resp, err := c.client.Do(req)
@@ -65,14 +89,48 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 		}
 	}()
 
-	slog.InfoContext(ctx, "GitHub API response received", "status", resp.Status, "url", apiURL, "elapsed", elapsed)
+	// Log rate limit headers for all responses
+	rateLimitHeaders := map[string]string{
+		"X-RateLimit-Limit":     resp.Header.Get("X-Ratelimit-Limit"),
+		"X-RateLimit-Remaining": resp.Header.Get("X-Ratelimit-Remaining"),
+		"X-RateLimit-Reset":     resp.Header.Get("X-Ratelimit-Reset"),
+		"X-RateLimit-Used":      resp.Header.Get("X-Ratelimit-Used"),
+		"X-RateLimit-Resource":  resp.Header.Get("X-Ratelimit-Resource"),
+		"Retry-After":           resp.Header.Get("Retry-After"),
+	}
+
+	slog.InfoContext(ctx, "GitHub API response received",
+		"status", resp.Status,
+		"url", apiURL,
+		"elapsed", elapsed,
+		"rate_limits", rateLimitHeaders)
 
 	if resp.StatusCode != http.StatusOK {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 		if readErr != nil {
 			body = []byte("failed to read response body")
 		}
-		slog.ErrorContext(ctx, "GitHub API error", "status", resp.Status, "url", apiURL, "body", string(body))
+
+		// Log comprehensive error details including headers
+		errorHeaders := make(map[string][]string)
+		for key, values := range resp.Header {
+			// Include relevant error-related headers
+			if strings.HasPrefix(key, "X-") ||
+				key == "Content-Type" ||
+				key == "Date" ||
+				key == "Server" ||
+				key == "Retry-After" ||
+				key == "X-GitHub-Request-Id" {
+				errorHeaders[key] = values
+			}
+		}
+
+		slog.ErrorContext(ctx, "GitHub API error",
+			"status", resp.Status,
+			"status_code", resp.StatusCode,
+			"url", apiURL,
+			"body", string(body),
+			"headers", errorHeaders)
 		return nil, nil, &GitHubAPIError{
 			StatusCode: resp.StatusCode,
 			Status:     resp.Status,
