@@ -1,7 +1,9 @@
 package prx
 
 import (
+	"regexp"
 	"strings"
+	"sync"
 )
 
 const (
@@ -9,45 +11,139 @@ const (
 	maxTruncateLength = 256
 )
 
+// questionPatterns defines phrases that typically indicate a question is being asked.
+// Each pattern will be compiled into a regex with word boundaries to avoid false positives.
 var questionPatterns = []string{
+	// Direct questions
 	"how can",
 	"how do",
 	"how would",
 	"how should",
+	"how about",
+	"how to",
+	// Modal questions
 	"should i",
 	"should we",
+	"should this",
 	"can i",
 	"can we",
 	"can you",
+	"can someone",
+	"can anyone",
+	"could i",
+	"could we",
 	"could you",
+	"could someone",
+	"could anyone",
 	"would you",
+	"would someone",
+	"would anyone",
+	"will you",
+	"will this",
+	"may i",
+	// What questions
 	"what do you think",
-	"what's the best",
-	"what is the best",
+	"what's the",
+	"what is the",
+	"what are",
+	"what about",
+	// Request patterns
 	"any suggestions",
 	"any ideas",
 	"any thoughts",
+	"any feedback",
 	"anyone know",
+	"anyone else",
+	"someone know",
 	"does anyone",
+	"does someone",
+	"does this",
+	"do we",
+	"do you",
+	// Possibility questions
 	"is it possible",
 	"is there a way",
+	"is this",
+	"is that",
+	"are there",
+	"are we",
+	// Indirect questions
 	"wondering if",
 	"thoughts on",
 	"advice on",
 	"help with",
 	"need help",
+	// Why/when/where/who questions
+	"why is",
+	"why does",
+	"when should",
+	"when can",
+	"when will",
+	"where should",
+	"where can",
+	"where is",
+	"which one",
+	"which is",
+	"who can",
+	"who is",
+	"who knows",
+	// Have/has questions
+	"have you",
+	"has anyone",
+	"has someone",
 }
 
+// questionRegexCache caches compiled regexes for performance.
+var (
+	questionRegexCache map[string]*regexp.Regexp
+	questionRegexOnce  sync.Once
+)
+
+// initQuestionRegexes compiles all question patterns into regexes with word boundaries.
+// This is done once on first use to avoid repeated compilation.
+func initQuestionRegexes() {
+	questionRegexCache = make(map[string]*regexp.Regexp, len(questionPatterns))
+	for _, p := range questionPatterns {
+		// Split pattern into words and add word boundaries
+		w := strings.Fields(p)
+		if len(w) == 0 {
+			continue // Skip empty patterns (defensive programming)
+		}
+		for i, word := range w {
+			w[i] = regexp.QuoteMeta(word)
+		}
+		// Add word boundaries: \b at start of first word, \b at end of last word
+		w[0] = "\\b" + w[0]
+		w[len(w)-1] = w[len(w)-1] + "\\b"
+		// Join with flexible whitespace and compile as case-insensitive
+		questionRegexCache[p] = regexp.MustCompile("(?i)" + strings.Join(w, "\\s+"))
+	}
+}
+
+// containsQuestion determines if text contains a question based on:
+// 1. Presence of a question mark
+// 2. Common question patterns with proper word boundaries.
 func containsQuestion(text string) bool {
+	// Quick check for question mark
 	if strings.Contains(text, "?") {
 		return true
 	}
-	lowerText := strings.ToLower(text)
-	for _, pattern := range questionPatterns {
-		if strings.Contains(lowerText, pattern) {
+
+	// Return false for empty or very short text
+	if len(text) < 3 {
+		return false
+	}
+
+	// Initialize regex cache once
+	questionRegexOnce.Do(initQuestionRegexes)
+
+	// Check against compiled patterns
+	for _, re := range questionRegexCache {
+		if re.MatchString(text) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -85,6 +181,7 @@ func buildPullRequest(pr *githubPullRequest) PullRequest {
 		Additions:      pr.Additions,
 		Deletions:      pr.Deletions,
 		ChangedFiles:   pr.ChangedFiles,
+		HeadSHA:        pr.Head.SHA,
 	}
 
 	if pr.User != nil {
@@ -112,22 +209,22 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 	latestChecks := make(map[string]checkInfo)
 
 	// Collect latest state for each check
-	for _, event := range events {
-		if (event.Kind == "status_check" || event.Kind == "check_run") && event.Body != "" {
-			latestChecks[event.Body] = checkInfo{
-				outcome:     event.Outcome,
-				description: event.Description,
+	for _, e := range events {
+		if (e.Kind == "status_check" || e.Kind == "check_run") && e.Body != "" {
+			latestChecks[e.Body] = checkInfo{
+				outcome:     e.Outcome,
+				description: e.Description,
 			}
 		}
 	}
 
 	// Count checks and collect status descriptions
-	seenRequired := make(map[string]bool)
-	for checkName, info := range latestChecks {
+	seen := make(map[string]bool)
+	for name, info := range latestChecks {
 		// Track required checks we've seen
-		for _, required := range requiredChecks {
-			if required == checkName {
-				seenRequired[required] = true
+		for _, req := range requiredChecks {
+			if req == name {
+				seen[req] = true
 				break
 			}
 		}
@@ -138,10 +235,10 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 			summary.Success++
 		case "failure", "error", "timed_out", "action_required":
 			summary.Failure++
-			summary.FailingStatuses[checkName] = info.description
+			summary.FailingStatuses[name] = info.description
 		case "pending", "queued", "in_progress", "waiting":
 			summary.Pending++
-			summary.PendingStatuses[checkName] = info.description
+			summary.PendingStatuses[name] = info.description
 		case "neutral", "cancelled", "skipped", "stale":
 			summary.Neutral++
 		default:
@@ -150,10 +247,10 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 	}
 
 	// Add missing required checks as pending
-	for _, required := range requiredChecks {
-		if !seenRequired[required] {
+	for _, req := range requiredChecks {
+		if !seen[req] {
 			summary.Pending++
-			summary.PendingStatuses[required] = "Expected — Waiting for status to be reported"
+			summary.PendingStatuses[req] = "Expected — Waiting for status to be reported"
 		}
 	}
 
@@ -166,9 +263,9 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 	// Track the latest review state from each user
 	latestReviews := make(map[string]Event)
 
-	for _, event := range events {
-		if event.Kind == "review" && event.Outcome != "" {
-			latestReviews[event.Actor] = event
+	for _, e := range events {
+		if e.Kind == "review" && e.Outcome != "" {
+			latestReviews[e.Actor] = e
 		}
 	}
 
@@ -195,16 +292,16 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 func filterEvents(events []Event) []Event {
 	filtered := make([]Event, 0, len(events))
 
-	for _, event := range events {
+	for _, e := range events {
 		// Include all non-status_check events
-		if event.Kind != "status_check" {
-			filtered = append(filtered, event)
+		if e.Kind != "status_check" {
+			filtered = append(filtered, e)
 			continue
 		}
 
 		// For status_check events, only include if outcome is failure
-		if event.Outcome == "failure" {
-			filtered = append(filtered, event)
+		if e.Outcome == "failure" {
+			filtered = append(filtered, e)
 		}
 	}
 
@@ -215,15 +312,15 @@ func filterEvents(events []Event) []Event {
 // for actors who have performed actions that require write access.
 func upgradeWriteAccess(events []Event) {
 	// Track actors who have definitely demonstrated write access
-	confirmedWriteAccess := make(map[string]bool)
+	confirmed := make(map[string]bool)
 
 	// First pass: identify actors who have performed write-access-requiring actions
-	for _, event := range events {
-		switch event.Kind {
+	for _, e := range events {
+		switch e.Kind {
 		case "pr_merged", "labeled", "unlabeled", "assigned", "unassigned", "milestoned", "demilestoned":
 			// These actions require write access to the repository
-			if event.Actor != "" {
-				confirmedWriteAccess[event.Actor] = true
+			if e.Actor != "" {
+				confirmed[e.Actor] = true
 			}
 		default:
 			// Other event types don't require write access
@@ -233,7 +330,7 @@ func upgradeWriteAccess(events []Event) {
 	// Second pass: upgrade write_access from 1 to 2 for confirmed actors
 	for i := range events {
 		if events[i].WriteAccess == WriteAccessLikely {
-			if confirmedWriteAccess[events[i].Actor] {
+			if confirmed[events[i].Actor] {
 				events[i].WriteAccess = WriteAccessDefinitely
 			}
 		}
