@@ -1,8 +1,13 @@
 package prx
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -250,10 +255,11 @@ func (c *Client) statusChecks(ctx context.Context, owner, repo string, pr *githu
 
 	for _, status := range statuses {
 		event := Event{
-			Kind:      "status_check",
-			Timestamp: status.CreatedAt,
-			Outcome:   status.State,   // "success", "failure", "pending", "error"
-			Body:      status.Context, // The status check name
+			Kind:        "status_check",
+			Timestamp:   status.CreatedAt,
+			Outcome:     status.State,       // "success", "failure", "pending", "error"
+			Body:        status.Context,     // The status check name
+			Description: status.Description, // The status description
 		}
 		if status.Creator != nil {
 			event.Actor = status.Creator.Login
@@ -337,6 +343,17 @@ func (c *Client) checkRuns(ctx context.Context, owner, repo string, pr *githubPu
 			Outcome:   outcome,
 			Body:      checkRun.Name, // Store check run name in body field
 		}
+		// Add status description from output if available
+		switch {
+		case checkRun.Output.Title != "" && checkRun.Output.Summary != "":
+			event.Description = fmt.Sprintf("%s: %s", checkRun.Output.Title, checkRun.Output.Summary)
+		case checkRun.Output.Title != "":
+			event.Description = checkRun.Output.Title
+		case checkRun.Output.Summary != "":
+			event.Description = checkRun.Output.Summary
+		default:
+			// No description available
+		}
 		// GitHub Apps are always considered bots
 		if checkRun.App.Owner != nil {
 			event.Bot = true
@@ -367,10 +384,19 @@ func (c *Client) requiredStatusChecks(ctx context.Context, owner, repo string, p
 
 	var allRequired []string
 
+	// Try GraphQL first to get refUpdateRule (newer GitHub feature)
+	graphqlChecks, err := c.fetchRequiredChecksViaGraphQL(ctx, owner, repo, pr.Base.Ref)
+	if err == nil && len(graphqlChecks) > 0 {
+		c.logger.InfoContext(ctx, "found required checks from GraphQL refUpdateRule", countField, len(graphqlChecks), "checks", graphqlChecks)
+		allRequired = append(allRequired, graphqlChecks...)
+	} else if err != nil {
+		c.logger.InfoContext(ctx, "GraphQL query for refUpdateRule failed", "error", err)
+	}
+
 	// Try the combined status API first - this should show what GitHub considers required
 	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status", owner, repo, pr.Head.SHA)
 	var combinedStatus githubCombinedStatus
-	_, err := c.github.get(ctx, statusPath, &combinedStatus)
+	_, err = c.github.get(ctx, statusPath, &combinedStatus)
 	if err == nil {
 		c.logger.InfoContext(ctx, "fetched combined status", "state", combinedStatus.State, "total_count", combinedStatus.TotalCount)
 		// Log what contexts are available in the combined status
@@ -605,4 +631,91 @@ func (*Client) isWorkflowExpectedForPR(workflowName string) bool {
 	}
 
 	return false
+}
+
+// fetchRequiredChecksViaGraphQL fetches required status checks using GitHub's GraphQL API.
+// This is needed to get refUpdateRule which is not available via REST API.
+func (c *Client) fetchRequiredChecksViaGraphQL(ctx context.Context, owner, repo, branch string) ([]string, error) {
+	// Type assert to access the underlying githubClient
+	gc, ok := c.github.(*githubClient)
+	if !ok {
+		return nil, errors.New("cannot access GitHub client for GraphQL")
+	}
+
+	query := `
+	query($owner: String!, $repo: String!, $branch: String!) {
+		repository(owner: $owner, name: $repo) {
+			ref(qualifiedName: $branch) {
+				refUpdateRule {
+					requiredStatusCheckContexts
+				}
+			}
+		}
+	}`
+
+	variables := map[string]string{
+		"owner":  owner,
+		"repo":   repo,
+		"branch": fmt.Sprintf("refs/heads/%s", branch),
+	}
+
+	requestBody := map[string]any{
+		"query":     query,
+		"variables": variables,
+	}
+
+	bodyBytes, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling GraphQL request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gc.api+"/graphql", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("creating GraphQL request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", gc.token))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github.v4+json")
+
+	resp, err := gc.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing GraphQL request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		// Limit response body reading to prevent memory exhaustion
+		limitedBody := io.LimitReader(resp.Body, 1024*1024) // 1MB limit
+		body, err := io.ReadAll(limitedBody)
+		if err != nil {
+			return nil, fmt.Errorf("GraphQL request failed with status %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("GraphQL request failed with status %d: %s", resp.StatusCode, body)
+	}
+
+	var result struct {
+		Data struct {
+			Repository struct {
+				Ref struct {
+					RefUpdateRule struct {
+						RequiredStatusCheckContexts []string `json:"requiredStatusCheckContexts"`
+					} `json:"refUpdateRule"`
+				} `json:"ref"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding GraphQL response: %w", err)
+	}
+
+	if len(result.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL errors: %v", result.Errors)
+	}
+
+	return result.Data.Repository.Ref.RefUpdateRule.RequiredStatusCheckContexts, nil
 }

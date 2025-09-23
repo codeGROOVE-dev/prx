@@ -72,6 +72,13 @@ func TestCacheClient(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+		case "/graphql":
+			// GraphQL endpoint - return no required checks
+			response := `{"data": {"repository": {"ref": {"refUpdateRule": null}}}}`
+			if _, err := w.Write([]byte(response)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		default:
 			// Check runs endpoint expects a different format
 			if r.URL.Path == "/repos/test/repo/commits/abc123/check-runs" {
@@ -132,6 +139,7 @@ func TestCacheClient(t *testing.T) {
 
 	// We expect a few API requests for required status checks detection on second call
 	// since those endpoints aren't cached and run synchronously before other goroutines
+	// This includes: GraphQL, combined status, branch protection, rulesets
 	if afterSecondRequest-beforeSecondRequest > 5 {
 		t.Errorf("Expected at most 5 API requests for cached call with required checks, got %d", afterSecondRequest-beforeSecondRequest)
 	}
