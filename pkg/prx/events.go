@@ -125,6 +125,7 @@ type Event struct {
 	Target      string    `json:"target,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
 	Body        string    `json:"body,omitempty"`
+	Description string    `json:"description,omitempty"`
 	WriteAccess int       `json:"write_access,omitempty"`
 	Bot         bool      `json:"bot,omitempty"`
 	TargetIsBot bool      `json:"target_is_bot,omitempty"`

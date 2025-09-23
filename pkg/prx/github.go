@@ -296,6 +296,10 @@ type githubCheckRun struct {
 	Conclusion  string    `json:"conclusion"`
 	Status      string    `json:"status"`
 	HTMLURL     string    `json:"html_url"`
+	Output      struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	} `json:"output"`
 }
 
 // githubCheckRuns represents a list of GitHub check runs.

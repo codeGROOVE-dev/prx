@@ -572,6 +572,17 @@ func (c *CacheClient) cachedCheckRuns(
 				Body:      run.Name, // Store check run name in body field
 				Required:  requiredSet[run.Name],
 			}
+			// Add status description from output if available
+			switch {
+			case run.Output.Title != "" && run.Output.Summary != "":
+				event.Description = fmt.Sprintf("%s: %s", run.Output.Title, run.Output.Summary)
+			case run.Output.Title != "":
+				event.Description = run.Output.Title
+			case run.Output.Summary != "":
+				event.Description = run.Output.Summary
+			default:
+				// No description available
+			}
 			allEvents = append(allEvents, event)
 		}
 

@@ -99,40 +99,49 @@ func buildPullRequest(pr *githubPullRequest) PullRequest {
 }
 
 func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummary {
-	summary := &CheckSummary{}
-	checkStates := make(map[string]string)
+	summary := &CheckSummary{
+		FailingStatuses: make(map[string]string),
+		PendingStatuses: make(map[string]string),
+	}
 
+	// Track latest state for each check (deduplicates multiple runs of same check)
+	type checkInfo struct {
+		outcome     string
+		description string
+	}
+	latestChecks := make(map[string]checkInfo)
+
+	// Collect latest state for each check
 	for _, event := range events {
 		if (event.Kind == "status_check" || event.Kind == "check_run") && event.Body != "" {
-			key := event.Kind + ":" + event.Body
-			checkStates[key] = event.Outcome
+			latestChecks[event.Body] = checkInfo{
+				outcome:     event.Outcome,
+				description: event.Description,
+			}
 		}
 	}
 
-	// Track which required checks have been seen
-	requiredChecksSeen := make(map[string]bool)
-
-	for key, outcome := range checkStates {
-		// Extract check name from key (format: "kind:name")
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) == 2 {
-			checkName := parts[1]
-			// Mark this required check as seen
-			for _, required := range requiredChecks {
-				if required == checkName {
-					requiredChecksSeen[required] = true
-					break
-				}
+	// Count checks and collect status descriptions
+	seenRequired := make(map[string]bool)
+	for checkName, info := range latestChecks {
+		// Track required checks we've seen
+		for _, required := range requiredChecks {
+			if required == checkName {
+				seenRequired[required] = true
+				break
 			}
 		}
 
-		switch outcome {
+		// Count and categorize the check
+		switch info.outcome {
 		case "success":
 			summary.Success++
-		case "failure", "error", "timed_out":
+		case "failure", "error", "timed_out", "action_required":
 			summary.Failure++
-		case "pending", "queued", "in_progress", "waiting", "action_required":
+			summary.FailingStatuses[checkName] = info.description
+		case "pending", "queued", "in_progress", "waiting":
 			summary.Pending++
+			summary.PendingStatuses[checkName] = info.description
 		case "neutral", "cancelled", "skipped", "stale":
 			summary.Neutral++
 		default:
@@ -142,8 +151,9 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 
 	// Add missing required checks as pending
 	for _, required := range requiredChecks {
-		if !requiredChecksSeen[required] {
+		if !seenRequired[required] {
 			summary.Pending++
+			summary.PendingStatuses[required] = "Expected — Waiting for status to be reported"
 		}
 	}
 
