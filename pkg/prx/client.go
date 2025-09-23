@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -39,7 +38,6 @@ type Client struct {
 	token           string // Store token for recreating client with new transport
 	permissionCache *permissionCache
 	cacheDir        string // empty if caching is disabled
-	useGraphQL      bool   // use GraphQL API instead of REST
 }
 
 // isBot returns true if the user appears to be a bot.
@@ -83,14 +81,6 @@ func WithNoCache() Option {
 	}
 }
 
-// WithGraphQL enables GraphQL API mode instead of REST.
-// This can significantly reduce API quota usage (1 call vs 13+).
-// Note: This is experimental and may have slight differences from REST.
-func WithGraphQL() Option {
-	return func(c *Client) {
-		c.useGraphQL = true
-	}
-}
 
 // NewClient creates a new Client with the given GitHub token.
 // Caching is enabled by default - use WithNoCache() to disable.
@@ -128,10 +118,6 @@ func NewClient(token string, opts ...Option) *Client {
 		// diskPath is empty, so it won't persist to disk
 	}
 
-	// Check environment variable for GraphQL mode
-	if os.Getenv("PRX_USE_GRAPHQL") == "1" || os.Getenv("PRX_USE_GRAPHQL") == "true" {
-		c.useGraphQL = true
-	}
 
 	for _, opt := range opts {
 		opt(c)
@@ -239,268 +225,13 @@ func (c *Client) pullRequestNonCached(ctx context.Context, owner, repo string, p
 
 // pullRequestImpl is the unified implementation that handles both cached and non-cached requests.
 func (c *Client) pullRequestImpl(ctx context.Context, owner, repo string, prNumber int, referenceTime *time.Time) (*PullRequestData, error) {
-	// Check if GraphQL mode is enabled
-	if c.useGraphQL {
-		c.logger.InfoContext(ctx, "GraphQL mode enabled", "owner", owner, "repo", repo, "pr", prNumber)
-		return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
-	}
-
-	useCache := c.cacheDir != "" && referenceTime != nil
-	logMsg := "fetching pull request"
-	if useCache {
-		logMsg = "fetching pull request with cache"
-	}
-	c.logger.InfoContext(ctx, logMsg, "owner", owner, "repo", repo, "pr", prNumber)
-	// Fetch the pull request
-	var pr *githubPullRequest
-	var err error
-	if useCache {
+	// Check if caching is enabled
+	if c.cacheDir != "" && referenceTime != nil {
 		cacheClient := &CacheClient{Client: c, cacheDir: c.cacheDir}
-		pr, err = cacheClient.cachedPullRequest(ctx, owner, repo, prNumber, *referenceTime)
-	} else {
-		var prData githubPullRequest
-		path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber)
-		if _, err := c.github.get(ctx, path, &prData); err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch pull request", "error", err)
-			return nil, fmt.Errorf("fetching pull request: %w", err)
-		}
-		pr = &prData
-		c.logger.InfoContext(ctx, "pull request metadata",
-			"mergeable", pr.Mergeable,
-			"mergeable_state", pr.MergeableState,
-			"draft", pr.Draft,
-			"additions", pr.Additions,
-			"deletions", pr.Deletions,
-			"changed_files", pr.ChangedFiles,
-			"pr", prNumber)
+		return cacheClient.cachedPullRequestViaGraphQL(ctx, owner, repo, prNumber, *referenceTime)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("fetching pull request: %w", err)
-	}
-
-	pullRequest := c.buildPullRequestWithMetadata(ctx, pr, owner, repo)
-	events := []Event{c.createPROpenedEvent(ctx, pr, owner, repo)}
-	requiredChecks := c.requiredStatusChecks(ctx, owner, repo, pr)
-
-	// Fetch all events
-	var fetchedEvents []Event
-	var testStateFromAPI string
-	if useCache {
-		cacheClient := &CacheClient{Client: c, cacheDir: c.cacheDir}
-		fetchedEvents, testStateFromAPI, err = c.fetchAllEventsCached(ctx, cacheClient, owner, repo, prNumber, pr.UpdatedAt, pr, requiredChecks)
-	} else {
-		fetchedEvents, testStateFromAPI, err = c.fetchAllEventsNonCached(ctx, owner, repo, prNumber, pr, requiredChecks)
-	}
-	if err != nil {
-		return nil, err
-	}
-	events = append(events, fetchedEvents...)
-
-	events = c.addCloseEvents(ctx, pr, owner, repo, events)
-	events = processEvents(events)
-	finalizePullRequest(&pullRequest, events, requiredChecks, testStateFromAPI)
-
-	logMsg = "successfully fetched pull request"
-	if useCache {
-		logMsg = "successfully fetched pull request with cache"
-	}
-	c.logger.InfoContext(ctx, logMsg, "owner", owner, "repo", repo, "pr", prNumber, "event_count", len(events))
-	return &PullRequestData{PullRequest: pullRequest, Events: events}, nil
-}
-
-// buildPullRequestWithMetadata creates a PullRequest object with all metadata populated.
-func (c *Client) buildPullRequestWithMetadata(ctx context.Context, pr *githubPullRequest, owner, repo string) PullRequest {
-	pullRequest := buildPullRequest(pr)
-	// Check if PR author has write access
-	if pr.User != nil {
-		pullRequest.AuthorWriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-	}
-	if !pr.ClosedAt.IsZero() {
-		pullRequest.ClosedAt = &pr.ClosedAt
-	}
-	if !pr.MergedAt.IsZero() {
-		pullRequest.MergedAt = &pr.MergedAt
-	}
-	if pr.MergedBy != nil {
-		pullRequest.MergedBy = pr.MergedBy.Login
-	}
-	for _, assignee := range pr.Assignees {
-		if assignee != nil {
-			pullRequest.Assignees = append(pullRequest.Assignees, assignee.Login)
-		}
-	}
-	for _, reviewer := range pr.RequestedReviewers {
-		if reviewer != nil {
-			pullRequest.RequestedReviewers = append(pullRequest.RequestedReviewers, reviewer.Login)
-		}
-	}
-	for _, label := range pr.Labels {
-		if label.Name != "" {
-			pullRequest.Labels = append(pullRequest.Labels, label.Name)
-		}
-	}
-	return pullRequest
-}
-
-// createPROpenedEvent creates the initial PR opened event.
-func (c *Client) createPROpenedEvent(ctx context.Context, pr *githubPullRequest, owner, repo string) Event {
-	prOpenedEvent := Event{
-		Kind:      "pr_opened",
-		Timestamp: pr.CreatedAt,
-	}
-	if pr.User != nil {
-		prOpenedEvent.Actor = pr.User.Login
-		prOpenedEvent.Bot = isBot(pr.User)
-		prOpenedEvent.WriteAccess = c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation)
-	} else {
-		prOpenedEvent.Actor = "unknown"
-		prOpenedEvent.Bot = false
-		prOpenedEvent.WriteAccess = WriteAccessNA
-	}
-	return prOpenedEvent
-}
-
-// fetchAllEventsNonCached fetches all event types in parallel using direct API calls.
-func (c *Client) fetchAllEventsNonCached(
-	ctx context.Context, owner, repo string, prNumber int, pr *githubPullRequest, requiredChecks []string,
-) ([]Event, string, error) {
-	results := make(chan fetchResult, maxConcurrentRequests)
-	go func() {
-		e, err := c.commits(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
-	}()
-	go func() {
-		e, err := c.comments(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
-	}()
-	go func() {
-		e, err := c.reviews(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
-	}()
-	go func() {
-		e, err := c.reviewComments(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
-	}()
-	go func() {
-		e, err := c.timelineEvents(ctx, owner, repo, prNumber)
-		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
-	}()
-	go func() {
-		e, err := c.statusChecks(ctx, owner, repo, pr, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
-	}()
-	go func() {
-		e, testState, err := c.checkRuns(ctx, owner, repo, pr, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
-	}()
-
-	var events []Event
-	var errs []error
-	var testStateFromAPI string
-	for range numFetchGoroutines {
-		r := <-results
-		if r.err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
-			errs = append(errs, r.err)
-		} else {
-			events = append(events, r.events...)
-			if r.name == "check runs" && r.testState != "" {
-				testStateFromAPI = r.testState
-			}
-		}
-	}
-
-	if len(events) == 0 && len(errs) > 0 {
-		return nil, "", fmt.Errorf("failed to fetch any events: %w", errs[0])
-	}
-	if len(errs) > 0 {
-		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data", "error_count", len(errs), "event_count", len(events))
-	}
-	return events, testStateFromAPI, nil
-}
-
-// fetchAllEventsCached fetches all event types in parallel using cached fetchers.
-func (c *Client) fetchAllEventsCached(
-	ctx context.Context, cacheClient *CacheClient, owner, repo string, prNumber int,
-	prUpdatedAt time.Time, pr *githubPullRequest, requiredChecks []string,
-) ([]Event, string, error) {
-	results := make(chan fetchResult, maxConcurrentRequests)
-	go func() {
-		e, err := cacheClient.cachedCommits(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "commits", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "comments", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedReviews(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "reviews", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedReviewComments(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "review comments", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedTimelineEvents(ctx, owner, repo, prNumber, prUpdatedAt)
-		results <- fetchResult{events: e, err: err, name: "timeline events", testState: ""}
-	}()
-	go func() {
-		e, err := cacheClient.cachedStatusChecks(ctx, owner, repo, pr, prUpdatedAt, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "status checks", testState: ""}
-	}()
-	go func() {
-		e, testState, err := cacheClient.cachedCheckRuns(ctx, owner, repo, pr, prUpdatedAt, requiredChecks)
-		results <- fetchResult{events: e, err: err, name: "check runs", testState: testState}
-	}()
-
-	var events []Event
-	var errs []error
-	var testStateFromAPI string
-	for range numFetchGoroutines {
-		r := <-results
-		if r.err != nil {
-			c.logger.ErrorContext(ctx, "failed to fetch "+r.name, "error", r.err)
-			errs = append(errs, r.err)
-		} else {
-			events = append(events, r.events...)
-			if r.name == "check runs" && r.testState != "" {
-				testStateFromAPI = r.testState
-			}
-		}
-	}
-
-	if len(events) == 0 && len(errs) > 0 {
-		return nil, "", fmt.Errorf("failed to fetch any events: %w", errs[0])
-	}
-	if len(errs) > 0 {
-		c.logger.WarnContext(ctx, "some event fetches failed but returning partial data", "error_count", len(errs), "event_count", len(events))
-	}
-	return events, testStateFromAPI, nil
-}
-
-// addCloseEvents adds merged/closed events if applicable.
-func (c *Client) addCloseEvents(ctx context.Context, pr *githubPullRequest, owner, repo string, events []Event) []Event {
-	if pr.Merged {
-		mergedEvent := Event{Kind: "pr_merged", Timestamp: pr.MergedAt}
-		if pr.MergedBy != nil {
-			mergedEvent.Actor = pr.MergedBy.Login
-			mergedEvent.Bot = isBot(pr.MergedBy)
-		} else {
-			mergedEvent.Actor = "unknown"
-		}
-		events = append(events, mergedEvent)
-	} else if pr.State == "closed" {
-		closedEvent := Event{
-			Kind:        "pr_closed",
-			Timestamp:   pr.ClosedAt,
-			Actor:       pr.User.Login,
-			Bot:         isBot(pr.User),
-			WriteAccess: c.writeAccess(ctx, owner, repo, pr.User, pr.AuthorAssociation),
-		}
-		events = append(events, closedEvent)
-	}
-	return events
+	// Direct GraphQL call without caching
+	return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
 }
 
 // processEvents filters, sorts, and upgrades write access for events.

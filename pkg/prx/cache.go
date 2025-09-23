@@ -72,6 +72,70 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	return c.PullRequestWithReferenceTime(ctx, owner, repo, prNumber, referenceTime)
 }
 
+// cachedPullRequestViaGraphQL fetches pull request data via GraphQL with caching support.
+func (c *CacheClient) cachedPullRequestViaGraphQL(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
+	cacheKey := c.cacheKey("pr_graphql", owner, repo, strconv.Itoa(prNumber))
+
+	// Try to load from cache
+	var cached cacheEntry
+	if c.loadCache(ctx, cacheKey, &cached) {
+		// Cache is valid if it was cached at or after the reference time
+		if cached.CachedAt.After(referenceTime) || cached.CachedAt.Equal(referenceTime) {
+			var prData PullRequestData
+			err := json.Unmarshal(cached.Data, &prData)
+			if err != nil {
+				c.logger.WarnContext(ctx, "failed to unmarshal cached GraphQL pull request", logFieldError, err)
+				// Continue to fetch from API instead of returning error
+				goto fetchFromAPI
+			}
+
+			c.logger.InfoContext(ctx, "cache hit: GraphQL pull request",
+				"owner", owner,
+				"repo", repo,
+				"pr", prNumber,
+				"cached_at", cached.CachedAt)
+			return &prData, nil
+		}
+		c.logger.InfoContext(ctx, "cache miss: GraphQL pull request expired",
+			"owner", owner,
+			"repo", repo,
+			"pr", prNumber,
+			"cached_at", cached.CachedAt,
+			"reference_time", referenceTime)
+	} else {
+		c.logger.InfoContext(ctx, "cache miss: GraphQL pull request not in cache",
+			"owner", owner,
+			"repo", repo,
+			"pr", prNumber)
+	}
+
+fetchFromAPI:
+	// Fetch from API
+	prData, err := c.Client.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	data, err := json.Marshal(prData)
+	if err != nil {
+		c.logger.WarnContext(ctx, "failed to marshal GraphQL pull request for cache", logFieldError, err)
+		return prData, nil
+	}
+
+	entry := cacheEntry{
+		Data:     data,
+		CachedAt: time.Now(),
+	}
+
+	err = c.saveCache(ctx, cacheKey, entry)
+	if err != nil {
+		c.logger.WarnContext(ctx, "failed to save GraphQL pull request to cache", logFieldError, err)
+	}
+
+	return prData, nil
+}
+
 // cachedPullRequest fetches a pull request with caching.
 func (c *CacheClient) cachedPullRequest(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*githubPullRequest, error) {
 	cacheKey := c.cacheKey("pr", owner, repo, strconv.Itoa(prNumber))
@@ -610,12 +674,8 @@ func (c *CacheClient) cachedCheckRuns(
 }
 
 func (c *CacheClient) cacheKey(parts ...string) string {
-	// Include API mode in the cache key to prevent conflicts
-	apiMode := "rest"
-	if c.useGraphQL {
-		apiMode = "graphql"
-	}
-	allParts := append([]string{apiMode}, parts...)
+	// Always use graphql mode now
+	allParts := append([]string{"graphql"}, parts...)
 	key := strings.Join(allParts, "/")
 	hash := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(hash[:])

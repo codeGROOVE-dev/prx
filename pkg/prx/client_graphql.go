@@ -3,6 +3,7 @@ package prx
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -32,21 +33,42 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 		}
 	}
 
+	// Get existing required checks from GraphQL
+	existingRequired := c.getExistingRequiredChecks(prData)
+
+	// Combine with additional required checks from rulesets
+	allRequired := append(existingRequired, additionalRequired...)
+
 	// 2. Fetch check runs via REST (GraphQL's statusCheckRollup is often null)
 	checkRunEvents, err := c.fetchCheckRunsREST(ctx, owner, repo, prData.PullRequest.HeadSHA)
 	if err != nil {
 		c.logger.WarnContext(ctx, "failed to fetch check runs via REST", "error", err)
 	} else {
+		// Mark check runs as required based on combined list
+		for i := range checkRunEvents {
+			for _, req := range allRequired {
+				if checkRunEvents[i].Body == req {
+					checkRunEvents[i].Required = true
+					break
+				}
+			}
+		}
+
 		// Add check run events to the events list
 		prData.Events = append(prData.Events, checkRunEvents...)
 
 		// Recalculate check summary with the new check run data
 		if len(checkRunEvents) > 0 {
-			c.recalculateCheckSummaryWithCheckRuns(ctx, prData, checkRunEvents, additionalRequired)
+			c.recalculateCheckSummaryWithCheckRuns(ctx, prData, checkRunEvents)
 		}
 
 		c.logger.InfoContext(ctx, "fetched check runs via REST", "count", len(checkRunEvents))
 	}
+
+	// Sort all events chronologically (oldest to newest)
+	sort.Slice(prData.Events, func(i, j int) bool {
+		return prData.Events[i].Timestamp.Before(prData.Events[j].Timestamp)
+	})
 
 	apiCallsUsed := 2 // GraphQL + rulesets
 	if len(checkRunEvents) > 0 {
@@ -208,8 +230,39 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 	return events, nil
 }
 
+// getExistingRequiredChecks extracts required checks that were already identified
+func (c *Client) getExistingRequiredChecks(prData *PullRequestData) []string {
+	var required []string
+
+	// Extract from existing events that are marked as required
+	for _, event := range prData.Events {
+		if event.Required && (event.Kind == "check_run" || event.Kind == "status_check") {
+			required = append(required, event.Body)
+		}
+	}
+
+	// Also extract from pending statuses in check summary (these are required but haven't run)
+	if prData.PullRequest.CheckSummary != nil {
+		for check := range prData.PullRequest.CheckSummary.PendingStatuses {
+			// Check if it's not already in the list
+			found := false
+			for _, r := range required {
+				if r == check {
+					found = true
+					break
+				}
+			}
+			if !found {
+				required = append(required, check)
+			}
+		}
+	}
+
+	return required
+}
+
 // recalculateCheckSummaryWithCheckRuns updates the check summary with REST-fetched check runs
-func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prData *PullRequestData, checkRunEvents []Event, requiredChecks []string) {
+func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prData *PullRequestData, checkRunEvents []Event) {
 	if prData.PullRequest.CheckSummary == nil {
 		prData.PullRequest.CheckSummary = &CheckSummary{
 			FailingStatuses: make(map[string]string),
@@ -218,23 +271,18 @@ func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prDat
 	}
 
 	summary := prData.PullRequest.CheckSummary
-	requiredSet := make(map[string]bool)
-	for _, check := range requiredChecks {
-		requiredSet[check] = true
-	}
 
-	// Process check run events
+	// Count check runs we fetched via REST
 	for _, event := range checkRunEvents {
 		if event.Kind != "check_run" {
 			continue
 		}
 
-		// Mark as required if it matches
-		event.Required = requiredSet[event.Body]
-
 		switch event.Outcome {
 		case "success":
 			summary.Success++
+			// Remove from pending if it was there (GraphQL might have marked it as pending)
+			delete(summary.PendingStatuses, event.Body)
 		case "failure", "timed_out", "action_required":
 			summary.Failure++
 			if event.Description != "" {
@@ -242,36 +290,39 @@ func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prDat
 			} else {
 				summary.FailingStatuses[event.Body] = event.Outcome
 			}
+			// Remove from pending if it was there
+			delete(summary.PendingStatuses, event.Body)
 		case "neutral", "cancelled", "skipped", "stale":
 			summary.Neutral++
+			// Remove from pending if it was there
+			delete(summary.PendingStatuses, event.Body)
 		case "queued", "in_progress", "pending", "waiting":
-			summary.Pending++
-			if event.Description != "" {
-				summary.PendingStatuses[event.Body] = event.Description
-			} else {
-				summary.PendingStatuses[event.Body] = "In progress"
+			// Don't increment pending count if already counted by GraphQL
+			if _, exists := summary.PendingStatuses[event.Body]; !exists {
+				summary.Pending++
+				if event.Description != "" {
+					summary.PendingStatuses[event.Body] = event.Description
+				} else {
+					summary.PendingStatuses[event.Body] = "In progress"
+				}
 			}
 		}
 	}
 
-	// Update test state based on check runs
-	prData.PullRequest.TestState = c.calculateTestStateFromEvents(checkRunEvents)
+	// Recalculate the pending count based on what's actually in PendingStatuses
+	// This fixes the issue where GraphQL initially marks all required checks as pending
+	summary.Pending = len(summary.PendingStatuses)
+
+	// Update test state based on ALL events (not just check runs)
+	prData.PullRequest.TestState = c.calculateTestStateFromAllEvents(prData.Events)
 }
 
-// calculateTestStateFromEvents determines test state from check run events
-func (c *Client) calculateTestStateFromEvents(events []Event) string {
-	var hasFailure, hasRunning, hasQueued bool
+// calculateTestStateFromAllEvents determines test state from ALL check events
+func (c *Client) calculateTestStateFromAllEvents(events []Event) string {
+	var hasFailure, hasRunning, hasQueued, hasSuccess bool
 
 	for _, event := range events {
-		if event.Kind != "check_run" {
-			continue
-		}
-
-		// Only consider test-related runs
-		nameLower := strings.ToLower(event.Body)
-		if !strings.Contains(nameLower, "test") &&
-		   !strings.Contains(nameLower, "check") &&
-		   !strings.Contains(nameLower, "ci") {
+		if event.Kind != "check_run" && event.Kind != "status_check" {
 			continue
 		}
 
@@ -282,9 +333,12 @@ func (c *Client) calculateTestStateFromEvents(events []Event) string {
 			hasRunning = true
 		case "queued", "pending", "waiting":
 			hasQueued = true
+		case "success":
+			hasSuccess = true
 		}
 	}
 
+	// Any failure means tests are failing
 	if hasFailure {
 		return TestStateFailing
 	}
@@ -294,5 +348,8 @@ func (c *Client) calculateTestStateFromEvents(events []Event) string {
 	if hasQueued {
 		return TestStateQueued
 	}
-	return TestStatePassing
+	if hasSuccess {
+		return TestStatePassing
+	}
+	return TestStateNone
 }

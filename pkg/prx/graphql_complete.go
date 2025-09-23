@@ -229,7 +229,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 				}
 			}
 
-			timelineItems(first: 100, after: $timelineCursor, itemTypes: [ASSIGNED_EVENT, UNASSIGNED_EVENT, LABELED_EVENT, UNLABELED_EVENT, MILESTONED_EVENT, DEMILESTONED_EVENT, CLOSED_EVENT, REOPENED_EVENT, REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, MENTIONED_EVENT, MERGED_EVENT]) {
+			timelineItems(first: 100, after: $timelineCursor) {
 				pageInfo {
 					hasNextPage
 					endCursor
@@ -370,6 +370,13 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						}
 					}
 					... on ReadyForReviewEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on ConvertToDraftEvent {
 						id
 						createdAt
 						actor {
@@ -1019,6 +1026,9 @@ func (c *Client) parseGraphQLTimelineEvent(ctx context.Context, item map[string]
 
 	case "ReadyForReviewEvent":
 		event.Kind = "ready_for_review"
+
+	case "ConvertToDraftEvent":
+		event.Kind = "convert_to_draft"
 
 	case "ClosedEvent":
 		event.Kind = "closed"
