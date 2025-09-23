@@ -51,7 +51,9 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 		return nil, fmt.Errorf("creating cache directory: %w", err)
 	}
 
-	client := NewClient(token, opts...)
+	// Create client with no cache since CacheClient handles caching
+	clientOpts := append(opts, WithNoCache())
+	client := NewClient(token, clientOpts...)
 
 	// Initialize permission cache with disk persistence for CacheClient
 	client.permissionCache = newPermissionCache(cleanPath)

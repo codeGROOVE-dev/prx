@@ -1,7 +1,9 @@
 package prx
 
 import (
+	"regexp"
 	"strings"
+	"sync"
 )
 
 const (
@@ -9,45 +11,149 @@ const (
 	maxTruncateLength = 256
 )
 
+// questionPatterns defines phrases that typically indicate a question is being asked.
+// Each pattern will be compiled into a regex with word boundaries to avoid false positives.
 var questionPatterns = []string{
+	// Direct questions
 	"how can",
 	"how do",
 	"how would",
 	"how should",
+	"how about",
+	"how to",
+	// Modal questions
 	"should i",
 	"should we",
+	"should this",
 	"can i",
 	"can we",
 	"can you",
+	"can someone",
+	"can anyone",
+	"could i",
+	"could we",
 	"could you",
+	"could someone",
+	"could anyone",
 	"would you",
+	"would someone",
+	"would anyone",
+	"will you",
+	"will this",
+	"may i",
+	// What questions
 	"what do you think",
-	"what's the best",
-	"what is the best",
+	"what's the",
+	"what is the",
+	"what are",
+	"what about",
+	// Request patterns
 	"any suggestions",
 	"any ideas",
 	"any thoughts",
+	"any feedback",
 	"anyone know",
+	"anyone else",
+	"someone know",
 	"does anyone",
+	"does someone",
+	"does this",
+	"do we",
+	"do you",
+	// Possibility questions
 	"is it possible",
 	"is there a way",
+	"is this",
+	"is that",
+	"are there",
+	"are we",
+	// Indirect questions
 	"wondering if",
 	"thoughts on",
 	"advice on",
 	"help with",
 	"need help",
+	// Why/when/where/who questions
+	"why is",
+	"why does",
+	"when should",
+	"when can",
+	"when will",
+	"where should",
+	"where can",
+	"where is",
+	"which one",
+	"which is",
+	"who can",
+	"who is",
+	"who knows",
+	// Have/has questions
+	"have you",
+	"has anyone",
+	"has someone",
 }
 
+// questionRegexCache caches compiled regexes for performance.
+var (
+	questionRegexCache map[string]*regexp.Regexp
+	questionRegexOnce  sync.Once
+)
+
+// initQuestionRegexes compiles all question patterns into regexes with word boundaries.
+// This is done once on first use to avoid repeated compilation.
+func initQuestionRegexes() {
+	questionRegexCache = make(map[string]*regexp.Regexp)
+	for _, pattern := range questionPatterns {
+		// Create regex with word boundaries
+		// Use \b for word boundaries at the start and end of the pattern
+		// Split the pattern into words and ensure each word has proper boundaries
+		words := strings.Fields(pattern)
+		regexParts := make([]string, len(words))
+		for i, word := range words {
+			// Escape any regex special characters in the word
+			escapedWord := regexp.QuoteMeta(word)
+			if i == 0 {
+				// First word needs boundary at start
+				regexParts[i] = "\\b" + escapedWord
+			} else if i == len(words)-1 {
+				// Last word needs boundary at end
+				regexParts[i] = escapedWord + "\\b"
+			} else {
+				// Middle words just need to match
+				regexParts[i] = escapedWord
+			}
+		}
+		// Join with flexible whitespace matching (one or more spaces)
+		regexStr := strings.Join(regexParts, "\\s+")
+		// Compile with case-insensitive flag
+		questionRegexCache[pattern] = regexp.MustCompile("(?i)" + regexStr)
+	}
+}
+
+// containsQuestion determines if text contains a question based on:
+// 1. Presence of a question mark
+// 2. Common question patterns with proper word boundaries.
 func containsQuestion(text string) bool {
+	// Quick check for question mark
 	if strings.Contains(text, "?") {
 		return true
 	}
-	lowerText := strings.ToLower(text)
-	for _, pattern := range questionPatterns {
-		if strings.Contains(lowerText, pattern) {
+
+	// Return false for empty or very short text
+	if len(text) < 3 {
+		return false
+	}
+
+	// Initialize regex cache once
+	questionRegexOnce.Do(initQuestionRegexes)
+
+	// Check against compiled patterns
+	for _, regex := range questionRegexCache {
+		if regex.MatchString(text) {
 			return true
 		}
 	}
+
 	return false
 }
 

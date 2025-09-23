@@ -73,8 +73,37 @@ func TestCacheClient(t *testing.T) {
 				return
 			}
 		case "/graphql":
-			// GraphQL endpoint - return no required checks
-			response := `{"data": {"repository": {"ref": {"refUpdateRule": null}}}}`
+			// GraphQL endpoint - return a minimal PR response
+			response := `{"data": {"repository": {"pullRequest": {
+				"number": 1,
+				"title": "Test PR",
+				"body": "Test body",
+				"state": "CLOSED",
+				"isDraft": false,
+				"createdAt": "2023-01-01T00:00:00Z",
+				"updatedAt": "2023-01-01T01:00:00Z",
+				"closedAt": "2023-01-01T02:00:00Z",
+				"mergedAt": null,
+				"mergedBy": null,
+				"mergeable": "UNKNOWN",
+				"mergeStateStatus": "UNKNOWN",
+				"additions": 10,
+				"deletions": 5,
+				"changedFiles": 2,
+				"author": {"login": "testuser"},
+				"authorAssociation": "CONTRIBUTOR",
+				"headRef": {"target": {"oid": "abc123"}},
+				"baseRef": {"name": "main", "target": {"oid": "def456"}},
+				"assignees": {"nodes": []},
+				"labels": {"nodes": []},
+				"reviews": {"nodes": []},
+				"reviewRequests": {"nodes": []},
+				"reviewThreads": {"nodes": []},
+				"commits": {"nodes": []},
+				"statusCheckRollup": null,
+				"timelineItems": {"nodes": [], "pageInfo": {"hasNextPage": false}},
+				"comments": {"nodes": []}
+			}}}}`
 			if _, err := w.Write([]byte(response)); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

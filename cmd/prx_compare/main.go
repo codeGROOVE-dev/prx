@@ -29,24 +29,24 @@ func main() {
 		log.Fatal("GitHub token required (set GITHUB_TOKEN or use -token)")
 	}
 
-	// Fetch with REST
-	fmt.Println("Fetching with REST API...")
+	// Both now use GraphQL, but we'll compare two fetches to ensure consistency
+	fmt.Println("Fetching first time...")
 	restClient := prx.NewClient(token)
 	restData, err := restClient.PullRequest(nil, owner, repo, prNumber)
 	if err != nil {
-		log.Fatalf("REST fetch failed: %v", err)
+		log.Fatalf("First fetch failed: %v", err)
 	}
 
-	// Fetch with GraphQL
-	fmt.Println("Fetching with GraphQL API...")
-	graphqlClient := prx.NewClient(token, prx.WithGraphQL())
+	// Fetch again to compare consistency
+	fmt.Println("Fetching second time...")
+	graphqlClient := prx.NewClient(token)
 	graphqlData, err := graphqlClient.PullRequest(nil, owner, repo, prNumber)
 	if err != nil {
-		log.Fatalf("GraphQL fetch failed: %v", err)
+		log.Fatalf("Second fetch failed: %v", err)
 	}
 
 	// Compare and report differences
-	fmt.Println("\n=== COMPARISON RESULTS ===\n")
+	fmt.Println("\n=== COMPARISON RESULTS ===")
 	comparePullRequestData(restData, graphqlData)
 
 	// Save to files for detailed inspection
