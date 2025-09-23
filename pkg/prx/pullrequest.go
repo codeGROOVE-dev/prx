@@ -42,6 +42,7 @@ type PullRequest struct {
 	AuthorBot                 bool             `json:"author_bot"`
 	Merged                    bool             `json:"merged"`
 	Draft                     bool             `json:"draft"`
+	HeadSHA                   string           `json:"head_sha,omitempty"`
 }
 
 // CheckSummary aggregates all status checks and check runs.

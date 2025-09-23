@@ -39,6 +39,7 @@ type Client struct {
 	token           string // Store token for recreating client with new transport
 	permissionCache *permissionCache
 	cacheDir        string // empty if caching is disabled
+	useGraphQL      bool   // use GraphQL API instead of REST
 }
 
 // isBot returns true if the user appears to be a bot.
@@ -82,6 +83,15 @@ func WithNoCache() Option {
 	}
 }
 
+// WithGraphQL enables GraphQL API mode instead of REST.
+// This can significantly reduce API quota usage (1 call vs 13+).
+// Note: This is experimental and may have slight differences from REST.
+func WithGraphQL() Option {
+	return func(c *Client) {
+		c.useGraphQL = true
+	}
+}
+
 // NewClient creates a new Client with the given GitHub token.
 // Caching is enabled by default - use WithNoCache() to disable.
 // If token is empty, WithHTTPClient option must be provided.
@@ -117,6 +127,12 @@ func NewClient(token string, opts ...Option) *Client {
 		memory: make(map[string]permissionEntry),
 		// diskPath is empty, so it won't persist to disk
 	}
+
+	// Check environment variable for GraphQL mode
+	if os.Getenv("PRX_USE_GRAPHQL") == "1" || os.Getenv("PRX_USE_GRAPHQL") == "true" {
+		c.useGraphQL = true
+	}
+
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -223,6 +239,12 @@ func (c *Client) pullRequestNonCached(ctx context.Context, owner, repo string, p
 
 // pullRequestImpl is the unified implementation that handles both cached and non-cached requests.
 func (c *Client) pullRequestImpl(ctx context.Context, owner, repo string, prNumber int, referenceTime *time.Time) (*PullRequestData, error) {
+	// Check if GraphQL mode is enabled
+	if c.useGraphQL {
+		c.logger.InfoContext(ctx, "GraphQL mode enabled", "owner", owner, "repo", repo, "pr", prNumber)
+		return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+	}
+
 	useCache := c.cacheDir != "" && referenceTime != nil
 	logMsg := "fetching pull request"
 	if useCache {

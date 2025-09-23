@@ -609,8 +609,14 @@ func (c *CacheClient) cachedCheckRuns(
 	return allEvents, testState, nil
 }
 
-func (*CacheClient) cacheKey(parts ...string) string {
-	key := strings.Join(parts, "/")
+func (c *CacheClient) cacheKey(parts ...string) string {
+	// Include API mode in the cache key to prevent conflicts
+	apiMode := "rest"
+	if c.useGraphQL {
+		apiMode = "graphql"
+	}
+	allParts := append([]string{apiMode}, parts...)
+	key := strings.Join(allParts, "/")
 	hash := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(hash[:])
 }

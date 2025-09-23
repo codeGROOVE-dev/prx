@@ -85,6 +85,7 @@ func buildPullRequest(pr *githubPullRequest) PullRequest {
 		Additions:      pr.Additions,
 		Deletions:      pr.Deletions,
 		ChangedFiles:   pr.ChangedFiles,
+		HeadSHA:        pr.Head.SHA,
 	}
 
 	if pr.User != nil {
