@@ -81,7 +81,6 @@ func WithNoCache() Option {
 	}
 }
 
-
 // NewClient creates a new Client with the given GitHub token.
 // Caching is enabled by default - use WithNoCache() to disable.
 // If token is empty, WithHTTPClient option must be provided.
@@ -117,7 +116,6 @@ func NewClient(token string, opts ...Option) *Client {
 		memory: make(map[string]permissionEntry),
 		// diskPath is empty, so it won't persist to disk
 	}
-
 
 	for _, opt := range opts {
 		opt(c)
