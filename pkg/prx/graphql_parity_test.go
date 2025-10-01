@@ -56,10 +56,13 @@ func comparePullRequestData(t *testing.T, rest, graphql *PullRequestData) {
 
 	// Check summaries
 	if pr1.CheckSummary != nil && pr2.CheckSummary != nil {
-		assertEqual(t, "CheckSummary.Success", pr1.CheckSummary.Success, pr2.CheckSummary.Success)
-		assertEqual(t, "CheckSummary.Failure", pr1.CheckSummary.Failure, pr2.CheckSummary.Failure)
-		assertEqual(t, "CheckSummary.Pending", pr1.CheckSummary.Pending, pr2.CheckSummary.Pending)
-		assertEqual(t, "CheckSummary.Neutral", pr1.CheckSummary.Neutral, pr2.CheckSummary.Neutral)
+		assertEqual(t, "CheckSummary.Success count", len(pr1.CheckSummary.Success), len(pr2.CheckSummary.Success))
+		assertEqual(t, "CheckSummary.Failing count", len(pr1.CheckSummary.Failing), len(pr2.CheckSummary.Failing))
+		assertEqual(t, "CheckSummary.Pending count", len(pr1.CheckSummary.Pending), len(pr2.CheckSummary.Pending))
+		assertEqual(t, "CheckSummary.Cancelled count", len(pr1.CheckSummary.Cancelled), len(pr2.CheckSummary.Cancelled))
+		assertEqual(t, "CheckSummary.Skipped count", len(pr1.CheckSummary.Skipped), len(pr2.CheckSummary.Skipped))
+		assertEqual(t, "CheckSummary.Stale count", len(pr1.CheckSummary.Stale), len(pr2.CheckSummary.Stale))
+		assertEqual(t, "CheckSummary.Neutral count", len(pr1.CheckSummary.Neutral), len(pr2.CheckSummary.Neutral))
 	}
 
 	// Compare event counts by type

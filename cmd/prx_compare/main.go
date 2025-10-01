@@ -98,21 +98,43 @@ func comparePullRequest(rest, graphql *prx.PullRequest) {
 			if field.Name == "CheckSummary" || field.Name == "ApprovalSummary" {
 				fmt.Printf("  %s:\n", field.Name)
 				if field.Name == "CheckSummary" && rest.CheckSummary != nil && graphql.CheckSummary != nil {
-					fmt.Printf("    REST:    Success=%d, Failure=%d, Pending=%d, Neutral=%d\n",
-						rest.CheckSummary.Success, rest.CheckSummary.Failure,
-						rest.CheckSummary.Pending, rest.CheckSummary.Neutral)
-					fmt.Printf("    GraphQL: Success=%d, Failure=%d, Pending=%d, Neutral=%d\n",
-						graphql.CheckSummary.Success, graphql.CheckSummary.Failure,
-						graphql.CheckSummary.Pending, graphql.CheckSummary.Neutral)
+					fmt.Printf("    REST:    Success=%d, Failing=%d, Pending=%d, Cancelled=%d, Skipped=%d, Stale=%d, Neutral=%d\n",
+						len(rest.CheckSummary.Success), len(rest.CheckSummary.Failing),
+						len(rest.CheckSummary.Pending), len(rest.CheckSummary.Cancelled),
+						len(rest.CheckSummary.Skipped), len(rest.CheckSummary.Stale), len(rest.CheckSummary.Neutral))
+					fmt.Printf("    GraphQL: Success=%d, Failing=%d, Pending=%d, Cancelled=%d, Skipped=%d, Stale=%d, Neutral=%d\n",
+						len(graphql.CheckSummary.Success), len(graphql.CheckSummary.Failing),
+						len(graphql.CheckSummary.Pending), len(graphql.CheckSummary.Cancelled),
+						len(graphql.CheckSummary.Skipped), len(graphql.CheckSummary.Stale), len(graphql.CheckSummary.Neutral))
 
 					// Compare status maps
-					if len(rest.CheckSummary.FailingStatuses) > 0 || len(graphql.CheckSummary.FailingStatuses) > 0 {
-						fmt.Println("    Failing Statuses:")
-						compareStatusMaps(rest.CheckSummary.FailingStatuses, graphql.CheckSummary.FailingStatuses)
+					if len(rest.CheckSummary.Success) > 0 || len(graphql.CheckSummary.Success) > 0 {
+						fmt.Println("    Success:")
+						compareStatusMaps(rest.CheckSummary.Success, graphql.CheckSummary.Success)
 					}
-					if len(rest.CheckSummary.PendingStatuses) > 0 || len(graphql.CheckSummary.PendingStatuses) > 0 {
-						fmt.Println("    Pending Statuses:")
-						compareStatusMaps(rest.CheckSummary.PendingStatuses, graphql.CheckSummary.PendingStatuses)
+					if len(rest.CheckSummary.Failing) > 0 || len(graphql.CheckSummary.Failing) > 0 {
+						fmt.Println("    Failing:")
+						compareStatusMaps(rest.CheckSummary.Failing, graphql.CheckSummary.Failing)
+					}
+					if len(rest.CheckSummary.Pending) > 0 || len(graphql.CheckSummary.Pending) > 0 {
+						fmt.Println("    Pending:")
+						compareStatusMaps(rest.CheckSummary.Pending, graphql.CheckSummary.Pending)
+					}
+					if len(rest.CheckSummary.Cancelled) > 0 || len(graphql.CheckSummary.Cancelled) > 0 {
+						fmt.Println("    Cancelled:")
+						compareStatusMaps(rest.CheckSummary.Cancelled, graphql.CheckSummary.Cancelled)
+					}
+					if len(rest.CheckSummary.Skipped) > 0 || len(graphql.CheckSummary.Skipped) > 0 {
+						fmt.Println("    Skipped:")
+						compareStatusMaps(rest.CheckSummary.Skipped, graphql.CheckSummary.Skipped)
+					}
+					if len(rest.CheckSummary.Stale) > 0 || len(graphql.CheckSummary.Stale) > 0 {
+						fmt.Println("    Stale:")
+						compareStatusMaps(rest.CheckSummary.Stale, graphql.CheckSummary.Stale)
+					}
+					if len(rest.CheckSummary.Neutral) > 0 || len(graphql.CheckSummary.Neutral) > 0 {
+						fmt.Println("    Neutral:")
+						compareStatusMaps(rest.CheckSummary.Neutral, graphql.CheckSummary.Neutral)
 					}
 				}
 			} else {

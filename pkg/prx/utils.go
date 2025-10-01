@@ -197,8 +197,13 @@ func buildPullRequest(pr *githubPullRequest) PullRequest {
 
 func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummary {
 	summary := &CheckSummary{
-		FailingStatuses: make(map[string]string),
-		PendingStatuses: make(map[string]string),
+		Success:   make(map[string]string),
+		Failing:   make(map[string]string),
+		Pending:   make(map[string]string),
+		Cancelled: make(map[string]string),
+		Skipped:   make(map[string]string),
+		Stale:     make(map[string]string),
+		Neutral:   make(map[string]string),
 	}
 
 	// Track latest state for each check (deduplicates multiple runs of same check)
@@ -218,7 +223,7 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 		}
 	}
 
-	// Count checks and collect status descriptions
+	// Collect checks and categorize them
 	seen := make(map[string]bool)
 	for name, info := range latestChecks {
 		// Track required checks we've seen
@@ -229,18 +234,22 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 			}
 		}
 
-		// Count and categorize the check
+		// Categorize the check (each check goes into exactly one category)
 		switch info.outcome {
 		case "success":
-			summary.Success++
+			summary.Success[name] = info.description
 		case "failure", "error", "timed_out", "action_required":
-			summary.Failure++
-			summary.FailingStatuses[name] = info.description
+			summary.Failing[name] = info.description
+		case "cancelled":
+			summary.Cancelled[name] = info.description
 		case "pending", "queued", "in_progress", "waiting":
-			summary.Pending++
-			summary.PendingStatuses[name] = info.description
-		case "neutral", "cancelled", "skipped", "stale":
-			summary.Neutral++
+			summary.Pending[name] = info.description
+		case "skipped":
+			summary.Skipped[name] = info.description
+		case "stale":
+			summary.Stale[name] = info.description
+		case "neutral":
+			summary.Neutral[name] = info.description
 		default:
 			// Unknown outcome, ignore
 		}
@@ -249,8 +258,7 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 	// Add missing required checks as pending
 	for _, req := range requiredChecks {
 		if !seen[req] {
-			summary.Pending++
-			summary.PendingStatuses[req] = "Expected — Waiting for status to be reported"
+			summary.Pending[req] = "Expected — Waiting for status to be reported"
 		}
 	}
 
