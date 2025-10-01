@@ -171,25 +171,25 @@ func TestCalculateCheckSummaryWithDescriptions(t *testing.T) {
 	summary := calculateCheckSummary(events, requiredChecks)
 
 	// Verify counts
-	if summary.Success != 2 {
-		t.Errorf("Expected 2 successful checks, got %d", summary.Success)
+	if len(summary.Success) != 2 {
+		t.Errorf("Expected 2 successful checks, got %d", len(summary.Success))
 	}
-	if summary.Failure != 1 {
-		t.Errorf("Expected 1 failing check, got %d", summary.Failure)
+	if len(summary.Failing) != 1 {
+		t.Errorf("Expected 1 failing check, got %d", len(summary.Failing))
 	}
-	if summary.Pending != 1 {
-		t.Errorf("Expected 1 pending check, got %d", summary.Pending)
+	if len(summary.Pending) != 1 {
+		t.Errorf("Expected 1 pending check, got %d", len(summary.Pending))
 	}
 
 	// Verify failing status descriptions
-	if desc, exists := summary.FailingStatuses["*control"]; !exists {
+	if desc, exists := summary.Failing["*control"]; !exists {
 		t.Error("Expected *control in failing statuses")
 	} else if desc != "Plan requires authorisation.: Plans submitted by users that are not a member of the organisation require explicit authorisation." {
 		t.Errorf("Expected *control description to be preserved, got %q", desc)
 	}
 
 	// Verify pending status descriptions
-	if desc, exists := summary.PendingStatuses["build-and-test / illumos"]; !exists {
+	if desc, exists := summary.Pending["build-and-test / illumos"]; !exists {
 		t.Error("Expected build-and-test / illumos in pending statuses")
 	} else if desc != "Expected — Waiting for status to be reported" {
 		t.Errorf("Expected pending check description to be preserved, got %q", desc)
@@ -245,7 +245,7 @@ func TestDropshotPR1359Regression(t *testing.T) {
 	events := []Event{event}
 	summary := calculateCheckSummary(events, []string{})
 
-	if desc, exists := summary.FailingStatuses["*control"]; !exists {
+	if desc, exists := summary.Failing["*control"]; !exists {
 		t.Error("Regression detected: *control not in failing statuses")
 	} else if desc != expectedDescription {
 		t.Errorf("Regression detected: *control description in summary incorrect.\nExpected: %q\nGot: %q",

@@ -241,9 +241,9 @@ func (c *Client) getExistingRequiredChecks(prData *PullRequestData) []string {
 		}
 	}
 
-	// Also extract from pending statuses in check summary (these are required but haven't run)
+	// Also extract from pending checks in check summary (these are required but haven't run)
 	if prData.PullRequest.CheckSummary != nil {
-		for check := range prData.PullRequest.CheckSummary.PendingStatuses {
+		for check := range prData.PullRequest.CheckSummary.Pending {
 			// Check if it's not already in the list
 			found := false
 			for _, r := range required {
@@ -265,53 +265,57 @@ func (c *Client) getExistingRequiredChecks(prData *PullRequestData) []string {
 func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prData *PullRequestData, checkRunEvents []Event) {
 	if prData.PullRequest.CheckSummary == nil {
 		prData.PullRequest.CheckSummary = &CheckSummary{
-			FailingStatuses: make(map[string]string),
-			PendingStatuses: make(map[string]string),
+			Success:   make(map[string]string),
+			Failing:   make(map[string]string),
+			Pending:   make(map[string]string),
+			Cancelled: make(map[string]string),
+			Skipped:   make(map[string]string),
+			Stale:     make(map[string]string),
+			Neutral:   make(map[string]string),
 		}
 	}
 
 	summary := prData.PullRequest.CheckSummary
 
-	// Count check runs we fetched via REST
+	// Process check runs we fetched via REST
 	for _, event := range checkRunEvents {
 		if event.Kind != "check_run" {
 			continue
 		}
 
+		desc := event.Description
+		if desc == "" {
+			desc = event.Outcome
+		}
+
 		switch event.Outcome {
 		case "success":
-			summary.Success++
+			summary.Success[event.Body] = desc
 			// Remove from pending if it was there (GraphQL might have marked it as pending)
-			delete(summary.PendingStatuses, event.Body)
+			delete(summary.Pending, event.Body)
 		case "failure", "timed_out", "action_required":
-			summary.Failure++
-			if event.Description != "" {
-				summary.FailingStatuses[event.Body] = event.Description
-			} else {
-				summary.FailingStatuses[event.Body] = event.Outcome
-			}
+			summary.Failing[event.Body] = desc
 			// Remove from pending if it was there
-			delete(summary.PendingStatuses, event.Body)
-		case "neutral", "cancelled", "skipped", "stale":
-			summary.Neutral++
-			// Remove from pending if it was there
-			delete(summary.PendingStatuses, event.Body)
+			delete(summary.Pending, event.Body)
+		case "cancelled":
+			summary.Cancelled[event.Body] = desc
+			delete(summary.Pending, event.Body)
+		case "skipped":
+			summary.Skipped[event.Body] = desc
+			delete(summary.Pending, event.Body)
+		case "stale":
+			summary.Stale[event.Body] = desc
+			delete(summary.Pending, event.Body)
+		case "neutral":
+			summary.Neutral[event.Body] = desc
+			delete(summary.Pending, event.Body)
 		case "queued", "in_progress", "pending", "waiting":
-			// Don't increment pending count if already counted by GraphQL
-			if _, exists := summary.PendingStatuses[event.Body]; !exists {
-				summary.Pending++
-				if event.Description != "" {
-					summary.PendingStatuses[event.Body] = event.Description
-				} else {
-					summary.PendingStatuses[event.Body] = "In progress"
-				}
+			// Don't overwrite if already counted by GraphQL
+			if _, exists := summary.Pending[event.Body]; !exists {
+				summary.Pending[event.Body] = desc
 			}
 		}
 	}
-
-	// Recalculate the pending count based on what's actually in PendingStatuses
-	// This fixes the issue where GraphQL initially marks all required checks as pending
-	summary.Pending = len(summary.PendingStatuses)
 
 	// Update test state based on ALL events (not just check runs)
 	prData.PullRequest.TestState = c.calculateTestStateFromAllEvents(prData.Events)

@@ -258,11 +258,11 @@ func finalizePullRequest(pullRequest *PullRequest, events []Event, requiredCheck
 // fixTestState ensures test_state is consistent with check_summary.
 func fixTestState(pullRequest *PullRequest) {
 	switch {
-	case pullRequest.CheckSummary.Failure > 0:
+	case len(pullRequest.CheckSummary.Failing) > 0 || len(pullRequest.CheckSummary.Cancelled) > 0:
 		pullRequest.TestState = TestStateFailing
-	case pullRequest.CheckSummary.Pending > 0:
+	case len(pullRequest.CheckSummary.Pending) > 0:
 		pullRequest.TestState = TestStatePending
-	case pullRequest.CheckSummary.Success > 0:
+	case len(pullRequest.CheckSummary.Success) > 0:
 		pullRequest.TestState = TestStatePassing
 	default:
 		pullRequest.TestState = TestStateNone
@@ -300,8 +300,8 @@ func setMergeableDescription(pullRequest *PullRequest) {
 // setBlockedDescription determines what's blocking the PR and sets appropriate description.
 func setBlockedDescription(pullRequest *PullRequest) {
 	hasApprovals := pullRequest.ApprovalSummary.ApprovalsWithWriteAccess > 0
-	hasFailingChecks := pullRequest.CheckSummary.Failure > 0
-	hasPendingChecks := pullRequest.CheckSummary.Pending > 0
+	hasFailingChecks := len(pullRequest.CheckSummary.Failing) > 0 || len(pullRequest.CheckSummary.Cancelled) > 0
+	hasPendingChecks := len(pullRequest.CheckSummary.Pending) > 0
 
 	switch {
 	case !hasApprovals && !hasFailingChecks:

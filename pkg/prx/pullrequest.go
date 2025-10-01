@@ -47,12 +47,13 @@ type PullRequest struct {
 
 // CheckSummary aggregates all status checks and check runs.
 type CheckSummary struct {
-	Success         int               `json:"success"`          // Checks that completed successfully
-	Failure         int               `json:"failure"`          // Checks that failed, errored, or require action
-	Pending         int               `json:"pending"`          // Checks that are queued or in progress
-	Neutral         int               `json:"neutral"`          // Checks that were cancelled, skipped, or neutral
-	FailingStatuses map[string]string `json:"failing_statuses"` // Map of failing check names to their status descriptions
-	PendingStatuses map[string]string `json:"pending_statuses"` // Map of pending check names to their status descriptions
+	Success   map[string]string `json:"success"`   // Map of successful check names to their status descriptions
+	Failing   map[string]string `json:"failing"`   // Map of failing check names to their status descriptions (excludes cancelled)
+	Pending   map[string]string `json:"pending"`   // Map of pending check names to their status descriptions
+	Cancelled map[string]string `json:"cancelled"` // Map of cancelled check names to their status descriptions
+	Skipped   map[string]string `json:"skipped"`   // Map of skipped check names to their status descriptions
+	Stale     map[string]string `json:"stale"`     // Map of stale check names to their status descriptions
+	Neutral   map[string]string `json:"neutral"`   // Map of neutral check names to their status descriptions
 }
 
 // ApprovalSummary tracks PR review approvals and change requests.

@@ -7,15 +7,16 @@ import (
 
 func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 	tests := []struct {
-		name                    string
-		events                  []Event
-		requiredChecks          []string
-		expectedSuccess         int
-		expectedFailure         int
-		expectedPending         int
-		expectedNeutral         int
-		expectedFailingStatuses map[string]string
-		expectedPendingStatuses map[string]string
+		name              string
+		events            []Event
+		requiredChecks    []string
+		expectedSuccess   map[string]string
+		expectedFailing   map[string]string
+		expectedPending   map[string]string
+		expectedCancelled map[string]string
+		expectedSkipped   map[string]string
+		expectedStale     map[string]string
+		expectedNeutral   map[string]string
 	}{
 		{
 			name: "mixed statuses with descriptions",
@@ -45,18 +46,21 @@ func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 					Description: "Security scan error: timeout",
 				},
 			},
-			requiredChecks:  []string{"build", "test", "lint", "security"},
-			expectedSuccess: 1,
-			expectedFailure: 2,
-			expectedPending: 1,
-			expectedNeutral: 0,
-			expectedFailingStatuses: map[string]string{
+			requiredChecks: []string{"build", "test", "lint", "security"},
+			expectedSuccess: map[string]string{
+				"build": "",
+			},
+			expectedFailing: map[string]string{
 				"test":     "3 tests failed",
 				"security": "Security scan error: timeout",
 			},
-			expectedPendingStatuses: map[string]string{
+			expectedPending: map[string]string{
 				"lint": "Running linter...",
 			},
+			expectedCancelled: map[string]string{},
+			expectedSkipped:   map[string]string{},
+			expectedStale:     map[string]string{},
+			expectedNeutral:   map[string]string{},
 		},
 		{
 			name: "missing required checks marked as pending",
@@ -67,16 +71,19 @@ func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 					Outcome: "success",
 				},
 			},
-			requiredChecks:          []string{"build", "test", "lint"},
-			expectedSuccess:         1,
-			expectedFailure:         0,
-			expectedPending:         2, // test and lint are missing
-			expectedNeutral:         0,
-			expectedFailingStatuses: map[string]string{},
-			expectedPendingStatuses: map[string]string{
+			requiredChecks: []string{"build", "test", "lint"},
+			expectedSuccess: map[string]string{
+				"build": "",
+			},
+			expectedFailing: map[string]string{},
+			expectedPending: map[string]string{
 				"test": "Expected — Waiting for status to be reported",
 				"lint": "Expected — Waiting for status to be reported",
 			},
+			expectedCancelled: map[string]string{},
+			expectedSkipped:   map[string]string{},
+			expectedStale:     map[string]string{},
+			expectedNeutral:   map[string]string{},
 		},
 		{
 			name: "action_required counted as failure",
@@ -89,36 +96,44 @@ func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 				},
 			},
 			requiredChecks:  []string{"deploy"},
-			expectedSuccess: 0,
-			expectedFailure: 1,
-			expectedPending: 0,
-			expectedNeutral: 0,
-			expectedFailingStatuses: map[string]string{
+			expectedSuccess: map[string]string{},
+			expectedFailing: map[string]string{
 				"deploy": "Manual approval needed",
 			},
-			expectedPendingStatuses: map[string]string{},
+			expectedPending:   map[string]string{},
+			expectedCancelled: map[string]string{},
+			expectedSkipped:   map[string]string{},
+			expectedStale:     map[string]string{},
+			expectedNeutral:   map[string]string{},
 		},
 		{
-			name: "neutral statuses",
+			name: "cancelled and skipped statuses",
 			events: []Event{
 				{
-					Kind:    "check_run",
-					Body:    "optional-check",
-					Outcome: "cancelled",
+					Kind:        "check_run",
+					Body:        "optional-check",
+					Outcome:     "cancelled",
+					Description: "Workflow cancelled",
 				},
 				{
-					Kind:    "status_check",
-					Body:    "skipped-check",
-					Outcome: "skipped",
+					Kind:        "status_check",
+					Body:        "skipped-check",
+					Outcome:     "skipped",
+					Description: "Skipped due to condition",
 				},
 			},
-			requiredChecks:          []string{},
-			expectedSuccess:         0,
-			expectedFailure:         0,
-			expectedPending:         0,
-			expectedNeutral:         2,
-			expectedFailingStatuses: map[string]string{},
-			expectedPendingStatuses: map[string]string{},
+			requiredChecks:  []string{},
+			expectedSuccess: map[string]string{},
+			expectedFailing: map[string]string{},
+			expectedPending: map[string]string{},
+			expectedCancelled: map[string]string{
+				"optional-check": "Workflow cancelled",
+			},
+			expectedSkipped: map[string]string{
+				"skipped-check": "Skipped due to condition",
+			},
+			expectedStale:   map[string]string{},
+			expectedNeutral: map[string]string{},
 		},
 		{
 			name: "duplicate check names use latest",
@@ -136,27 +151,31 @@ func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 					Description: "Re-run succeeded",
 				},
 			},
-			requiredChecks:          []string{"test"},
-			expectedSuccess:         1,
-			expectedFailure:         0,
-			expectedPending:         0,
-			expectedNeutral:         0,
-			expectedFailingStatuses: map[string]string{},
-			expectedPendingStatuses: map[string]string{},
+			requiredChecks: []string{"test"},
+			expectedSuccess: map[string]string{
+				"test": "Re-run succeeded",
+			},
+			expectedFailing:   map[string]string{},
+			expectedPending:   map[string]string{},
+			expectedCancelled: map[string]string{},
+			expectedSkipped:   map[string]string{},
+			expectedStale:     map[string]string{},
+			expectedNeutral:   map[string]string{},
 		},
 		{
-			name:                    "no events with required checks",
-			events:                  []Event{},
-			requiredChecks:          []string{"build", "test"},
-			expectedSuccess:         0,
-			expectedFailure:         0,
-			expectedPending:         2,
-			expectedNeutral:         0,
-			expectedFailingStatuses: map[string]string{},
-			expectedPendingStatuses: map[string]string{
+			name:           "no events with required checks",
+			events:         []Event{},
+			requiredChecks: []string{"build", "test"},
+			expectedSuccess: map[string]string{},
+			expectedFailing: map[string]string{},
+			expectedPending: map[string]string{
 				"build": "Expected — Waiting for status to be reported",
 				"test":  "Expected — Waiting for status to be reported",
 			},
+			expectedCancelled: map[string]string{},
+			expectedSkipped:   map[string]string{},
+			expectedStale:     map[string]string{},
+			expectedNeutral:   map[string]string{},
 		},
 	}
 
@@ -164,29 +183,26 @@ func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			summary := calculateCheckSummary(tt.events, tt.requiredChecks)
 
-			if summary.Success != tt.expectedSuccess {
-				t.Errorf("Success: got %d, want %d", summary.Success, tt.expectedSuccess)
+			if !reflect.DeepEqual(summary.Success, tt.expectedSuccess) {
+				t.Errorf("Success mismatch\ngot:  %v\nwant: %v", summary.Success, tt.expectedSuccess)
 			}
-			if summary.Failure != tt.expectedFailure {
-				t.Errorf("Failure: got %d, want %d", summary.Failure, tt.expectedFailure)
+			if !reflect.DeepEqual(summary.Failing, tt.expectedFailing) {
+				t.Errorf("Failing mismatch\ngot:  %v\nwant: %v", summary.Failing, tt.expectedFailing)
 			}
-			if summary.Pending != tt.expectedPending {
-				t.Errorf("Pending: got %d, want %d", summary.Pending, tt.expectedPending)
+			if !reflect.DeepEqual(summary.Pending, tt.expectedPending) {
+				t.Errorf("Pending mismatch\ngot:  %v\nwant: %v", summary.Pending, tt.expectedPending)
 			}
-			if summary.Neutral != tt.expectedNeutral {
-				t.Errorf("Neutral: got %d, want %d", summary.Neutral, tt.expectedNeutral)
+			if !reflect.DeepEqual(summary.Cancelled, tt.expectedCancelled) {
+				t.Errorf("Cancelled mismatch\ngot:  %v\nwant: %v", summary.Cancelled, tt.expectedCancelled)
 			}
-
-			// Check failing statuses map
-			if !reflect.DeepEqual(summary.FailingStatuses, tt.expectedFailingStatuses) {
-				t.Errorf("FailingStatuses mismatch\ngot:  %v\nwant: %v",
-					summary.FailingStatuses, tt.expectedFailingStatuses)
+			if !reflect.DeepEqual(summary.Skipped, tt.expectedSkipped) {
+				t.Errorf("Skipped mismatch\ngot:  %v\nwant: %v", summary.Skipped, tt.expectedSkipped)
 			}
-
-			// Check pending statuses map
-			if !reflect.DeepEqual(summary.PendingStatuses, tt.expectedPendingStatuses) {
-				t.Errorf("PendingStatuses mismatch\ngot:  %v\nwant: %v",
-					summary.PendingStatuses, tt.expectedPendingStatuses)
+			if !reflect.DeepEqual(summary.Stale, tt.expectedStale) {
+				t.Errorf("Stale mismatch\ngot:  %v\nwant: %v", summary.Stale, tt.expectedStale)
+			}
+			if !reflect.DeepEqual(summary.Neutral, tt.expectedNeutral) {
+				t.Errorf("Neutral mismatch\ngot:  %v\nwant: %v", summary.Neutral, tt.expectedNeutral)
 			}
 		})
 	}
@@ -196,19 +212,125 @@ func TestCheckSummaryInitialization(t *testing.T) {
 	// Test that maps are properly initialized even with no events
 	summary := calculateCheckSummary([]Event{}, []string{})
 
-	if summary.FailingStatuses == nil {
-		t.Error("FailingStatuses map should be initialized, not nil")
+	if summary.Success == nil {
+		t.Error("Success map should be initialized, not nil")
+	}
+	if summary.Failing == nil {
+		t.Error("Failing map should be initialized, not nil")
+	}
+	if summary.Pending == nil {
+		t.Error("Pending map should be initialized, not nil")
+	}
+	if summary.Cancelled == nil {
+		t.Error("Cancelled map should be initialized, not nil")
+	}
+	if summary.Skipped == nil {
+		t.Error("Skipped map should be initialized, not nil")
+	}
+	if summary.Stale == nil {
+		t.Error("Stale map should be initialized, not nil")
+	}
+	if summary.Neutral == nil {
+		t.Error("Neutral map should be initialized, not nil")
 	}
 
-	if summary.PendingStatuses == nil {
-		t.Error("PendingStatuses map should be initialized, not nil")
+	if len(summary.Success) != 0 {
+		t.Errorf("Success should be empty, got %d items", len(summary.Success))
+	}
+	if len(summary.Failing) != 0 {
+		t.Errorf("Failing should be empty, got %d items", len(summary.Failing))
+	}
+	if len(summary.Pending) != 0 {
+		t.Errorf("Pending should be empty, got %d items", len(summary.Pending))
+	}
+}
+
+func TestCheckSummaryCancelledNotInFailing(t *testing.T) {
+	// Regression test: cancelled checks should only appear in cancelled map, not in failing map
+	// This was a bug where cancelled checks appeared in both maps
+	// Based on real-world scenario from https://github.com/codeGROOVE-dev/goose/pull/65
+	events := []Event{
+		{
+			Kind:        "check_run",
+			Body:        "Kusari Inspector",
+			Outcome:     "success",
+			Description: "Security Analysis Passed: No security issues found",
+		},
+		{
+			Kind:    "check_run",
+			Body:    "golangci-lint",
+			Outcome: "success",
+		},
+		{
+			Kind:    "check_run",
+			Body:    "Test (ubuntu-latest)",
+			Outcome: "success",
+		},
+		{
+			Kind:    "check_run",
+			Body:    "Test (windows-latest)",
+			Outcome: "success",
+		},
+		{
+			Kind:        "check_run",
+			Body:        "Test (macos-latest)",
+			Outcome:     "cancelled",
+			Description: "cancelled",
+		},
 	}
 
-	if len(summary.FailingStatuses) != 0 {
-		t.Errorf("FailingStatuses should be empty, got %d items", len(summary.FailingStatuses))
+	summary := calculateCheckSummary(events, []string{})
+
+	// Verify cancelled check is ONLY in cancelled map
+	if _, exists := summary.Cancelled["Test (macos-latest)"]; !exists {
+		t.Error("Expected Test (macos-latest) to be in cancelled map")
 	}
 
-	if len(summary.PendingStatuses) != 0 {
-		t.Errorf("PendingStatuses should be empty, got %d items", len(summary.PendingStatuses))
+	// Verify cancelled check is NOT in failing map
+	if _, exists := summary.Failing["Test (macos-latest)"]; exists {
+		t.Error("Test (macos-latest) should NOT be in failing map, only in cancelled map")
+	}
+
+	// Verify success checks are in success map
+	if len(summary.Success) != 4 {
+		t.Errorf("Expected 4 successful checks, got %d", len(summary.Success))
+	}
+
+	// Verify counts
+	if len(summary.Failing) != 0 {
+		t.Errorf("Expected 0 failing checks, got %d", len(summary.Failing))
+	}
+	if len(summary.Cancelled) != 1 {
+		t.Errorf("Expected 1 cancelled check, got %d", len(summary.Cancelled))
+	}
+
+	// Verify each check appears in exactly one category
+	allChecks := make(map[string]int)
+	for check := range summary.Success {
+		allChecks[check]++
+	}
+	for check := range summary.Failing {
+		allChecks[check]++
+	}
+	for check := range summary.Pending {
+		allChecks[check]++
+	}
+	for check := range summary.Cancelled {
+		allChecks[check]++
+	}
+	for check := range summary.Skipped {
+		allChecks[check]++
+	}
+	for check := range summary.Stale {
+		allChecks[check]++
+	}
+	for check := range summary.Neutral {
+		allChecks[check]++
+	}
+
+	for check, count := range allChecks {
+		if count != 1 {
+			t.Errorf("Check %q appears in %d categories, should be exactly 1", check, count)
+		}
 	}
 }
