@@ -25,19 +25,17 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 	additionalRequired, err := c.fetchRulesetsREST(ctx, owner, repo)
 	if err != nil {
 		c.logger.WarnContext(ctx, "failed to fetch rulesets", "error", err)
-	} else {
+	} else if prData.PullRequest.CheckSummary != nil && len(additionalRequired) > 0 {
 		// Add to existing required checks
-		if prData.PullRequest.CheckSummary != nil && len(additionalRequired) > 0 {
-			// Would need to recalculate with new required checks
-			c.logger.InfoContext(ctx, "added required checks from rulesets", "count", len(additionalRequired))
-		}
+		// Would need to recalculate with new required checks
+		c.logger.InfoContext(ctx, "added required checks from rulesets", "count", len(additionalRequired))
 	}
 
 	// Get existing required checks from GraphQL
 	existingRequired := c.getExistingRequiredChecks(prData)
 
 	// Combine with additional required checks from rulesets
-	allRequired := append(existingRequired, additionalRequired...)
+	existingRequired = append(existingRequired, additionalRequired...)
 
 	// 2. Fetch check runs via REST (GraphQL's statusCheckRollup is often null)
 	checkRunEvents, err := c.fetchCheckRunsREST(ctx, owner, repo, prData.PullRequest.HeadSHA)
@@ -46,7 +44,7 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 	} else {
 		// Mark check runs as required based on combined list
 		for i := range checkRunEvents {
-			for _, req := range allRequired {
+			for _, req := range existingRequired {
 				if checkRunEvents[i].Body == req {
 					checkRunEvents[i].Required = true
 					break
@@ -83,7 +81,7 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 	return prData, nil
 }
 
-// fetchRulesetsREST fetches repository rulesets via REST API (not available in GraphQL)
+// fetchRulesetsREST fetches repository rulesets via REST API (not available in GraphQL).
 func (c *Client) fetchRulesetsREST(ctx context.Context, owner, repo string) ([]string, error) {
 	rulesetPath := fmt.Sprintf("/repos/%s/%s/rulesets", owner, repo)
 	var rulesets []githubRuleset
@@ -112,69 +110,7 @@ func (c *Client) fetchRulesetsREST(ctx context.Context, owner, repo string) ([]s
 	return requiredChecks, nil
 }
 
-// fixWriteAccessForMembers updates write access for MEMBER users (requires REST API)
-func (c *Client) fixWriteAccessForMembers(ctx context.Context, owner, repo string, events []Event) {
-	// Track which users need permission checks
-	memberUsers := make(map[string]bool)
-
-	for i := range events {
-		// Check if this event has MEMBER association that needs verification
-		if events[i].WriteAccess == WriteAccessLikely {
-			memberUsers[events[i].Actor] = true
-		}
-	}
-
-	// Batch check permissions for all MEMBER users
-	for user := range memberUsers {
-		perm, err := c.userPermissionCached(ctx, owner, repo, user, "MEMBER")
-		if err != nil {
-			c.logger.DebugContext(ctx, "failed to get user permission", "error", err, "user", user)
-			continue
-		}
-
-		// Update all events for this user
-		writeAccess := WriteAccessUnlikely
-		if perm == "admin" || perm == "write" {
-			writeAccess = WriteAccessDefinitely
-		}
-
-		for i := range events {
-			if events[i].Actor == user && events[i].WriteAccess == WriteAccessLikely {
-				events[i].WriteAccess = writeAccess
-			}
-		}
-	}
-}
-
-// verifyBotStatus verifies bot status using REST API if needed
-func (c *Client) verifyBotStatus(ctx context.Context, owner, repo string, events []Event) {
-	// GraphQL bot detection is based on login patterns and fragments
-	// For critical bot detection, we might want to verify with REST API
-	// However, for most cases, the GraphQL detection should be sufficient
-
-	// Only verify if we have ambiguous cases
-	ambiguousUsers := make(map[string]bool)
-
-	for _, event := range events {
-		// Check if we need to verify this user
-		if event.Actor != "" && !event.Bot {
-			// If it looks like it might be a bot but we're not sure
-			if strings.Contains(event.Actor, "bot") ||
-			   strings.Contains(event.Actor, "Bot") ||
-			   strings.Contains(event.Actor, "robot") {
-				ambiguousUsers[event.Actor] = true
-			}
-		}
-	}
-
-	// For now, we'll trust the GraphQL bot detection
-	// Add REST verification here if needed in the future
-	if len(ambiguousUsers) > 0 {
-		c.logger.DebugContext(ctx, "ambiguous bot users detected", "users", ambiguousUsers)
-	}
-}
-
-// fetchCheckRunsREST fetches check runs via REST API for a specific commit
+// fetchCheckRunsREST fetches check runs via REST API for a specific commit.
 func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string) ([]Event, error) {
 	if sha == "" {
 		return nil, nil
@@ -195,13 +131,14 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 		var timestamp time.Time
 		var outcome string
 
-		if !run.CompletedAt.IsZero() {
+		switch {
+		case !run.CompletedAt.IsZero():
 			timestamp = run.CompletedAt
 			outcome = strings.ToLower(run.Conclusion)
-		} else if !run.StartedAt.IsZero() {
+		case !run.StartedAt.IsZero():
 			timestamp = run.StartedAt
 			outcome = strings.ToLower(run.Status)
-		} else {
+		default:
 			// No timestamp available, skip this check run
 			continue
 		}
@@ -216,12 +153,15 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 		}
 
 		// Build description from output
-		if run.Output.Title != "" && run.Output.Summary != "" {
+		switch {
+		case run.Output.Title != "" && run.Output.Summary != "":
 			event.Description = fmt.Sprintf("%s: %s", run.Output.Title, run.Output.Summary)
-		} else if run.Output.Title != "" {
+		case run.Output.Title != "":
 			event.Description = run.Output.Title
-		} else if run.Output.Summary != "" {
+		case run.Output.Summary != "":
 			event.Description = run.Output.Summary
+		default:
+			// No description available
 		}
 
 		events = append(events, event)
@@ -230,12 +170,13 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 	return events, nil
 }
 
-// getExistingRequiredChecks extracts required checks that were already identified
-func (c *Client) getExistingRequiredChecks(prData *PullRequestData) []string {
+// getExistingRequiredChecks extracts required checks that were already identified.
+func (*Client) getExistingRequiredChecks(prData *PullRequestData) []string {
 	var required []string
 
 	// Extract from existing events that are marked as required
-	for _, event := range prData.Events {
+	for i := range prData.Events {
+		event := &prData.Events[i]
 		if event.Required && (event.Kind == "check_run" || event.Kind == "status_check") {
 			required = append(required, event.Body)
 		}
@@ -261,8 +202,8 @@ func (c *Client) getExistingRequiredChecks(prData *PullRequestData) []string {
 	return required
 }
 
-// recalculateCheckSummaryWithCheckRuns updates the check summary with REST-fetched check runs
-func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prData *PullRequestData, checkRunEvents []Event) {
+// recalculateCheckSummaryWithCheckRuns updates the check summary with REST-fetched check runs.
+func (c *Client) recalculateCheckSummaryWithCheckRuns(_ /* ctx */ context.Context, prData *PullRequestData, checkRunEvents []Event) {
 	if prData.PullRequest.CheckSummary == nil {
 		prData.PullRequest.CheckSummary = &CheckSummary{
 			Success:   make(map[string]string),
@@ -278,7 +219,8 @@ func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prDat
 	summary := prData.PullRequest.CheckSummary
 
 	// Process check runs we fetched via REST
-	for _, event := range checkRunEvents {
+	for i := range checkRunEvents {
+		event := &checkRunEvents[i]
 		if event.Kind != "check_run" {
 			continue
 		}
@@ -314,6 +256,8 @@ func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prDat
 			if _, exists := summary.Pending[event.Body]; !exists {
 				summary.Pending[event.Body] = desc
 			}
+		default:
+			// Unknown outcome, ignore
 		}
 	}
 
@@ -321,11 +265,12 @@ func (c *Client) recalculateCheckSummaryWithCheckRuns(ctx context.Context, prDat
 	prData.PullRequest.TestState = c.calculateTestStateFromAllEvents(prData.Events)
 }
 
-// calculateTestStateFromAllEvents determines test state from ALL check events
-func (c *Client) calculateTestStateFromAllEvents(events []Event) string {
+// calculateTestStateFromAllEvents determines test state from ALL check events.
+func (*Client) calculateTestStateFromAllEvents(events []Event) string {
 	var hasFailure, hasRunning, hasQueued, hasSuccess bool
 
-	for _, event := range events {
+	for i := range events {
+		event := &events[i]
 		if event.Kind != "check_run" && event.Kind != "status_check" {
 			continue
 		}
@@ -339,6 +284,8 @@ func (c *Client) calculateTestStateFromAllEvents(events []Event) string {
 			hasQueued = true
 		case "success":
 			hasSuccess = true
+		default:
+			// Other outcomes don't affect test state
 		}
 	}
 

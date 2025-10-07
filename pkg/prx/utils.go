@@ -165,36 +165,6 @@ func truncate(s string) string {
 	return s[:maxTruncateLength]
 }
 
-// buildPullRequest converts a githubPullRequest to our internal PullRequest struct.
-func buildPullRequest(pr *githubPullRequest) PullRequest {
-	result := PullRequest{
-		Number:         pr.Number,
-		Title:          pr.Title,
-		Body:           truncate(pr.Body),
-		State:          pr.State,
-		Draft:          pr.Draft,
-		Merged:         pr.Merged,
-		Mergeable:      pr.Mergeable,
-		MergeableState: pr.MergeableState,
-		CreatedAt:      pr.CreatedAt,
-		UpdatedAt:      pr.UpdatedAt,
-		Additions:      pr.Additions,
-		Deletions:      pr.Deletions,
-		ChangedFiles:   pr.ChangedFiles,
-		HeadSHA:        pr.Head.SHA,
-	}
-
-	if pr.User != nil {
-		result.Author = pr.User.Login
-		result.AuthorBot = isBot(pr.User)
-	} else {
-		result.Author = "unknown"
-		result.AuthorBot = false
-	}
-
-	return result
-}
-
 func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummary {
 	summary := &CheckSummary{
 		Success:   make(map[string]string),
@@ -214,7 +184,8 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 	latestChecks := make(map[string]checkInfo)
 
 	// Collect latest state for each check
-	for _, e := range events {
+	for i := range events {
+		e := &events[i]
 		if (e.Kind == "status_check" || e.Kind == "check_run") && e.Body != "" {
 			latestChecks[e.Body] = checkInfo{
 				outcome:     e.Outcome,
@@ -271,14 +242,16 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 	// Track the latest review state from each user
 	latestReviews := make(map[string]Event)
 
-	for _, e := range events {
+	for i := range events {
+		e := &events[i]
 		if e.Kind == "review" && e.Outcome != "" {
-			latestReviews[e.Actor] = e
+			latestReviews[e.Actor] = *e
 		}
 	}
 
 	// Check permissions for each reviewer and categorize their reviews
-	for _, review := range latestReviews {
+	for actor := range latestReviews {
+		review := latestReviews[actor]
 		switch review.Outcome {
 		case "approved":
 			// Use the WriteAccess field that was already populated in the event
@@ -300,16 +273,17 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 func filterEvents(events []Event) []Event {
 	filtered := make([]Event, 0, len(events))
 
-	for _, e := range events {
+	for i := range events {
+		e := &events[i]
 		// Include all non-status_check events
 		if e.Kind != "status_check" {
-			filtered = append(filtered, e)
+			filtered = append(filtered, *e)
 			continue
 		}
 
 		// For status_check events, only include if outcome is failure
 		if e.Outcome == "failure" {
-			filtered = append(filtered, e)
+			filtered = append(filtered, *e)
 		}
 	}
 
@@ -323,7 +297,8 @@ func upgradeWriteAccess(events []Event) {
 	confirmed := make(map[string]bool)
 
 	// First pass: identify actors who have performed write-access-requiring actions
-	for _, e := range events {
+	for i := range events {
+		e := &events[i]
 		switch e.Kind {
 		case "pr_merged", "labeled", "unlabeled", "assigned", "unassigned", "milestoned", "demilestoned":
 			// These actions require write access to the repository

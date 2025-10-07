@@ -31,7 +31,8 @@ func Example() {
 	fmt.Printf("Status: %s, Mergeable: %v\n", data.PullRequest.State, data.PullRequest.MergeableState)
 
 	// Process events
-	for _, event := range data.Events {
+	for i := range data.Events {
+		event := &data.Events[i]
 		fmt.Printf("%s: %s by %s\n",
 			event.Timestamp.Format("2006-01-02 15:04:05"),
 			event.Kind,
@@ -61,8 +62,8 @@ func ExampleClient_PullRequest() {
 
 	// Count events by type
 	eventCounts := make(map[string]int)
-	for _, event := range data.Events {
-		eventCounts[event.Kind]++
+	for i := range data.Events {
+		eventCounts[data.Events[i].Kind]++
 	}
 
 	// Print summary

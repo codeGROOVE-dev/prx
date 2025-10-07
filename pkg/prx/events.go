@@ -108,14 +108,6 @@ const (
 	WriteAccessDefinitely = 2  // User definitely has write access (OWNER, COLLABORATOR, or confirmed via API)
 )
 
-// fetchResult represents the result of a concurrent fetch operation.
-type fetchResult struct {
-	err       error
-	name      string
-	testState string
-	events    []Event
-}
-
 // Event represents a single event that occurred on a pull request.
 // Each event captures who did what and when, with additional context depending on the event type.
 type Event struct {
@@ -131,20 +123,4 @@ type Event struct {
 	TargetIsBot bool      `json:"target_is_bot,omitempty"`
 	Question    bool      `json:"question,omitempty"`
 	Required    bool      `json:"required,omitempty"`
-}
-
-// createEvent is a helper function to create an Event with common fields.
-func createEvent(kind string, timestamp time.Time, user *githubUser, body string) Event {
-	body = truncate(body)
-	event := Event{
-		Kind:      kind,
-		Timestamp: timestamp,
-		Body:      body,
-		Question:  containsQuestion(body),
-	}
-	if user != nil {
-		event.Actor = user.Login
-		event.Bot = isBot(user)
-	}
-	return event
 }

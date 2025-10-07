@@ -163,9 +163,9 @@ func TestCalculateCheckSummaryWithMaps(t *testing.T) {
 			expectedNeutral:   map[string]string{},
 		},
 		{
-			name:           "no events with required checks",
-			events:         []Event{},
-			requiredChecks: []string{"build", "test"},
+			name:            "no events with required checks",
+			events:          []Event{},
+			requiredChecks:  []string{"build", "test"},
 			expectedSuccess: map[string]string{},
 			expectedFailing: map[string]string{},
 			expectedPending: map[string]string{

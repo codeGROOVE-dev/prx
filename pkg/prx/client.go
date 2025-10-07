@@ -6,13 +6,11 @@ package prx
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -21,10 +19,6 @@ const (
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 10
 	idleConnTimeoutSec  = 90
-	// Concurrency constants.
-	maxConcurrentRequests = 8
-	// numFetchGoroutines is the actual number of goroutines launched for fetching PR data.
-	numFetchGoroutines = 7 // commits, comments, reviews, review comments, timeline events, status checks, check runs
 )
 
 // Client provides methods to fetch GitHub pull request events.
@@ -38,17 +32,6 @@ type Client struct {
 	token           string // Store token for recreating client with new transport
 	permissionCache *permissionCache
 	cacheDir        string // empty if caching is disabled
-}
-
-// isBot returns true if the user appears to be a bot.
-func isBot(user *githubUser) bool {
-	if user == nil {
-		return false
-	}
-	return user.Type == "Bot" ||
-		strings.HasSuffix(user.Login, "-bot") ||
-		strings.HasSuffix(user.Login, "[bot]") ||
-		strings.HasSuffix(user.Login, "-robot")
 }
 
 // Option is a function that configures a Client.
@@ -80,7 +63,6 @@ func WithNoCache() Option {
 		c.cacheDir = ""
 	}
 }
-
 
 // NewClient creates a new Client with the given GitHub token.
 // Caching is enabled by default - use WithNoCache() to disable.
@@ -118,83 +100,10 @@ func NewClient(token string, opts ...Option) *Client {
 		// diskPath is empty, so it won't persist to disk
 	}
 
-
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
-}
-
-// writeAccess returns the write access level for a user.
-func (c *Client) writeAccess(ctx context.Context, owner, repo string, user *githubUser, association string) int {
-	if user == nil {
-		return WriteAccessNA
-	}
-	// Check association-based access
-	switch association {
-	case "OWNER", "COLLABORATOR":
-		return WriteAccessDefinitely
-	case "MEMBER":
-		// Need to check via API
-		perm, err := c.userPermissionCached(ctx, owner, repo, user.Login, association)
-		if err != nil {
-			c.logger.DebugContext(ctx, "failed to get user permission", "error", err, "user", user.Login)
-			return WriteAccessUnlikely
-		}
-		if perm == "uncertain" {
-			return WriteAccessLikely
-		}
-		if perm == "admin" || perm == "write" {
-			return WriteAccessDefinitely
-		}
-		return WriteAccessUnlikely
-	case "CONTRIBUTOR", "NONE":
-		return WriteAccessUnlikely
-	default:
-		return WriteAccessNA
-	}
-}
-
-// userPermissionCached checks user permissions with caching.
-func (c *Client) userPermissionCached(ctx context.Context, owner, repo, username, authorAssociation string) (string, error) {
-	// Check cache first
-	if perm, found := c.permissionCache.get(owner, repo, username); found {
-		c.logger.InfoContext(ctx, "permission cache hit", "owner", owner, "repo", repo, "user", username, "permission", perm)
-		return perm, nil
-	}
-	// Not in cache, fetch from API
-	c.logger.InfoContext(ctx, "permission cache miss - checking user permissions via API",
-		"owner", owner,
-		"repo", repo,
-		"user", username,
-		"author_association", authorAssociation,
-		"reason", "not in cache")
-	perm, err := c.github.userPermission(ctx, owner, repo, username)
-	if err != nil {
-		// Check if this is a 403 error (no permission to check)
-		var apiErr *GitHubAPIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
-			c.logger.InfoContext(ctx, "permission check failed with 403, assuming write access for MEMBER",
-				"owner", owner,
-				"repo", repo,
-				"user", username,
-				"author_association", authorAssociation,
-				"error", apiErr.Body)
-			// For MEMBER association with 403 error, we can't determine permissions
-			// Return "uncertain" to indicate we don't know
-			if cacheErr := c.permissionCache.set(owner, repo, username, "uncertain"); cacheErr != nil {
-				c.logger.WarnContext(ctx, "failed to cache permission", "error", cacheErr)
-			}
-			return "uncertain", nil // Can't determine access for MEMBER when API returns 403
-		}
-		return perm, err
-	}
-	// Cache the result
-	if err := c.permissionCache.set(owner, repo, username, perm); err != nil {
-		// Log error but don't fail the request
-		c.logger.WarnContext(ctx, "failed to cache permission", "error", err)
-	}
-	return perm, nil
 }
 
 // PullRequest fetches a pull request with all its events and metadata.

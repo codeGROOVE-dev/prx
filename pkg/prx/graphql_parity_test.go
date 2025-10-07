@@ -40,6 +40,7 @@ func TestGraphQLParity(t *testing.T) {
 
 // comparePullRequestData compares REST and GraphQL results
 func comparePullRequestData(t *testing.T, rest, graphql *PullRequestData) {
+	t.Helper()
 	// Compare PullRequest fields
 	pr1 := rest.PullRequest
 	pr2 := graphql.PullRequest
@@ -84,14 +85,15 @@ func comparePullRequestData(t *testing.T, rest, graphql *PullRequestData) {
 // countEventsByType counts events by their Kind
 func countEventsByType(events []Event) map[string]int {
 	counts := make(map[string]int)
-	for _, e := range events {
-		counts[e.Kind]++
+	for i := range events {
+		counts[events[i].Kind]++
 	}
 	return counts
 }
 
 // compareEvents compares event details
 func compareEvents(t *testing.T, restEvents, graphqlEvents []Event) {
+	t.Helper()
 	// Sort events by timestamp and kind for comparison
 	sort.Slice(restEvents, func(i, j int) bool {
 		if restEvents[i].Timestamp.Equal(restEvents[j].Timestamp) {
@@ -143,6 +145,7 @@ func compareEvents(t *testing.T, restEvents, graphqlEvents []Event) {
 
 // assertEqual is a test helper
 func assertEqual(t *testing.T, field string, expected, actual interface{}) {
+	t.Helper()
 	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf("%s mismatch: expected=%v, actual=%v", field, expected, actual)
 	}
@@ -227,18 +230,18 @@ func TestWriteAccessMapping(t *testing.T) {
 func TestRequiredChecksExtraction(t *testing.T) {
 	data := &graphQLPullRequestComplete{
 		BaseRef: struct {
-			Name   string `json:"name"`
-			Target struct {
-				OID string `json:"oid"`
-			} `json:"target"`
 			RefUpdateRule *struct {
 				RequiredStatusCheckContexts []string `json:"requiredStatusCheckContexts"`
 			} `json:"refUpdateRule"`
 			BranchProtectionRule *struct {
 				RequiredStatusCheckContexts  []string `json:"requiredStatusCheckContexts"`
-				RequiresStatusChecks         bool     `json:"requiresStatusChecks"`
 				RequiredApprovingReviewCount int      `json:"requiredApprovingReviewCount"`
+				RequiresStatusChecks         bool     `json:"requiresStatusChecks"`
 			} `json:"branchProtectionRule"`
+			Target struct {
+				OID string `json:"oid"`
+			} `json:"target"`
+			Name string `json:"name"`
 		}{
 			RefUpdateRule: &struct {
 				RequiredStatusCheckContexts []string `json:"requiredStatusCheckContexts"`
@@ -247,8 +250,8 @@ func TestRequiredChecksExtraction(t *testing.T) {
 			},
 			BranchProtectionRule: &struct {
 				RequiredStatusCheckContexts  []string `json:"requiredStatusCheckContexts"`
-				RequiresStatusChecks         bool     `json:"requiresStatusChecks"`
 				RequiredApprovingReviewCount int      `json:"requiredApprovingReviewCount"`
+				RequiresStatusChecks         bool     `json:"requiresStatusChecks"`
 			}{
 				RequiredStatusCheckContexts: []string{"build", "test"}, // "test" is duplicate
 			},
