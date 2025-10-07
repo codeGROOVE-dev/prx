@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -401,7 +402,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 func (c *Client) fetchPullRequestCompleteViaGraphQL(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
 	gc, ok := c.github.(*githubClient)
 	if !ok {
-		return nil, fmt.Errorf("cannot access GitHub client for GraphQL")
+		return nil, errors.New("cannot access GitHub client for GraphQL")
 	}
 
 	// Execute the query (may need pagination for large PRs)
@@ -432,15 +433,17 @@ func (c *Client) fetchPullRequestCompleteViaGraphQL(ctx context.Context, owner, 
 	}, nil
 }
 
-// executePaginatedGraphQL handles pagination for large PRs
-func (c *Client) executePaginatedGraphQL(ctx context.Context, gc *githubClient, owner, repo string, prNumber int) (*graphQLPullRequestComplete, error) {
-	variables := map[string]interface{}{
+// executePaginatedGraphQL handles pagination for large PRs.
+func (c *Client) executePaginatedGraphQL(
+	ctx context.Context, gc *githubClient, owner, repo string, prNumber int,
+) (*graphQLPullRequestComplete, error) {
+	variables := map[string]any{
 		"owner":  owner,
 		"repo":   repo,
 		"number": prNumber,
 	}
 
-	requestBody := map[string]interface{}{
+	requestBody := map[string]any{
 		"query":     completeGraphQLQuery,
 		"variables": variables,
 	}
@@ -465,7 +468,11 @@ func (c *Client) executePaginatedGraphQL(ctx context.Context, gc *githubClient, 
 	if err != nil {
 		return nil, fmt.Errorf("executing GraphQL request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			c.logger.WarnContext(ctx, "failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		limitedBody := io.LimitReader(resp.Body, 1024*1024)
@@ -496,16 +503,18 @@ func (c *Client) executePaginatedGraphQL(ctx context.Context, gc *githubClient, 
 	return &result.Data.Repository.PullRequest, nil
 }
 
-// graphQLCompleteResponse represents the complete GraphQL response
+// graphQLCompleteResponse represents the complete GraphQL response.
+//
+//nolint:govet // fieldalignment: Complex nested anonymous struct for JSON unmarshaling - reordering would make it unreadable
 type graphQLCompleteResponse struct {
 	Data struct {
 		Repository struct {
 			PullRequest graphQLPullRequestComplete `json:"pullRequest"`
 		} `json:"repository"`
 		RateLimit struct {
+			ResetAt   time.Time `json:"resetAt"`
 			Cost      int       `json:"cost"`
 			Remaining int       `json:"remaining"`
-			ResetAt   time.Time `json:"resetAt"`
 			Limit     int       `json:"limit"`
 		} `json:"rateLimit"`
 	} `json:"data"`
@@ -514,27 +523,33 @@ type graphQLCompleteResponse struct {
 	} `json:"errors"`
 }
 
-// graphQLPullRequestComplete includes ALL fields we need
+// graphQLPullRequestComplete includes ALL fields we need.
+//
+//nolint:govet // fieldalignment: Complex nested anonymous struct for JSON unmarshaling - reordering would make it unreadable
 type graphQLPullRequestComplete struct {
-	ID                string     `json:"id"`
-	Number            int        `json:"number"`
-	Title             string     `json:"title"`
-	Body              string     `json:"body"`
-	State             string     `json:"state"`
-	CreatedAt         time.Time  `json:"createdAt"`
-	UpdatedAt         time.Time  `json:"updatedAt"`
-	ClosedAt          *time.Time `json:"closedAt"`
-	MergedAt          *time.Time `json:"mergedAt"`
-	IsDraft           bool       `json:"isDraft"`
-	Additions         int        `json:"additions"`
-	Deletions         int        `json:"deletions"`
-	ChangedFiles      int        `json:"changedFiles"`
-	Mergeable         string     `json:"mergeable"`
-	MergeStateStatus  string     `json:"mergeStateStatus"`
-	AuthorAssociation string     `json:"authorAssociation"`
-
-	Author graphQLActor `json:"author"`
+	// 16-byte fields
+	CreatedAt time.Time    `json:"createdAt"`
+	UpdatedAt time.Time    `json:"updatedAt"`
+	Author    graphQLActor `json:"author"`
+	// 8-byte pointer fields
+	ClosedAt *time.Time    `json:"closedAt"`
+	MergedAt *time.Time    `json:"mergedAt"`
 	MergedBy *graphQLActor `json:"mergedBy"`
+	// 16-byte string fields
+	ID                string `json:"id"`
+	Title             string `json:"title"`
+	Body              string `json:"body"`
+	State             string `json:"state"`
+	Mergeable         string `json:"mergeable"`
+	MergeStateStatus  string `json:"mergeStateStatus"`
+	AuthorAssociation string `json:"authorAssociation"`
+	// 8-byte int fields
+	Number       int `json:"number"`
+	Additions    int `json:"additions"`
+	Deletions    int `json:"deletions"`
+	ChangedFiles int `json:"changedFiles"`
+	// 1-byte bool fields
+	IsDraft bool `json:"isDraft"`
 
 	Assignees struct {
 		Nodes []graphQLActor `json:"nodes"`
@@ -547,45 +562,46 @@ type graphQLPullRequestComplete struct {
 	} `json:"labels"`
 
 	BaseRef struct {
-		Name   string `json:"name"`
-		Target struct {
-			OID string `json:"oid"`
-		} `json:"target"`
 		RefUpdateRule *struct {
 			RequiredStatusCheckContexts []string `json:"requiredStatusCheckContexts"`
 		} `json:"refUpdateRule"`
 		BranchProtectionRule *struct {
 			RequiredStatusCheckContexts  []string `json:"requiredStatusCheckContexts"`
-			RequiresStatusChecks         bool     `json:"requiresStatusChecks"`
 			RequiredApprovingReviewCount int      `json:"requiredApprovingReviewCount"`
+			RequiresStatusChecks         bool     `json:"requiresStatusChecks"`
 		} `json:"branchProtectionRule"`
+		Target struct {
+			OID string `json:"oid"`
+		} `json:"target"`
+		Name string `json:"name"`
 	} `json:"baseRef"`
 
 	HeadRef struct {
-		Name   string `json:"name"`
 		Target struct {
-			OID              string `json:"oid"`
+			//nolint:govet // fieldalignment: Anonymous struct for GraphQL response - reordering fields would break JSON unmarshaling
 			StatusCheckRollup *struct {
-				State    string `json:"state"`
 				Contexts struct {
 					Nodes []graphQLStatusCheckNode `json:"nodes"`
 				} `json:"contexts"`
+				State string `json:"state"`
 			} `json:"statusCheckRollup"`
+			OID string `json:"oid"`
 		} `json:"target"`
+		Name string `json:"name"`
 	} `json:"headRef"`
 
 	Commits struct {
 		PageInfo graphQLPageInfo `json:"pageInfo"`
 		Nodes    []struct {
 			Commit struct {
-				OID           string    `json:"oid"`
-				Message       string    `json:"message"`
 				CommittedDate time.Time `json:"committedDate"`
 				Author        struct {
+					User  *graphQLActor `json:"user"`
 					Name  string        `json:"name"`
 					Email string        `json:"email"`
-					User  *graphQLActor `json:"user"`
 				} `json:"author"`
+				OID     string `json:"oid"`
+				Message string `json:"message"`
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
@@ -593,29 +609,29 @@ type graphQLPullRequestComplete struct {
 	Reviews struct {
 		PageInfo graphQLPageInfo `json:"pageInfo"`
 		Nodes    []struct {
-			ID                string        `json:"id"`
-			State             string        `json:"state"`
-			Body              string        `json:"body"`
-			CreatedAt         time.Time     `json:"createdAt"`
-			SubmittedAt       *time.Time    `json:"submittedAt"`
-			AuthorAssociation string        `json:"authorAssociation"`
-			Author            graphQLActor  `json:"author"`
+			ID                string       `json:"id"`
+			State             string       `json:"state"`
+			Body              string       `json:"body"`
+			CreatedAt         time.Time    `json:"createdAt"`
+			SubmittedAt       *time.Time   `json:"submittedAt"`
+			AuthorAssociation string       `json:"authorAssociation"`
+			Author            graphQLActor `json:"author"`
 		} `json:"nodes"`
 	} `json:"reviews"`
 
 	ReviewThreads struct {
 		Nodes []struct {
-			IsResolved bool `json:"isResolved"`
-			IsOutdated bool `json:"isOutdated"`
-			Comments   struct {
+			Comments struct {
 				Nodes []struct {
+					CreatedAt         time.Time    `json:"createdAt"`
+					Author            graphQLActor `json:"author"`
 					ID                string       `json:"id"`
 					Body              string       `json:"body"`
-					CreatedAt         time.Time    `json:"createdAt"`
 					AuthorAssociation string       `json:"authorAssociation"`
-					Author            graphQLActor `json:"author"`
 				} `json:"nodes"`
 			} `json:"comments"`
+			IsResolved bool `json:"isResolved"`
+			IsOutdated bool `json:"isOutdated"`
 		} `json:"nodes"`
 	} `json:"reviewThreads"`
 
@@ -631,19 +647,18 @@ type graphQLPullRequestComplete struct {
 	} `json:"comments"`
 
 	TimelineItems struct {
-		PageInfo graphQLPageInfo          `json:"pageInfo"`
-		Nodes    []map[string]interface{} `json:"nodes"`
+		PageInfo graphQLPageInfo  `json:"pageInfo"`
+		Nodes    []map[string]any `json:"nodes"`
 	} `json:"timelineItems"`
-
 }
 
-// graphQLActor represents any GitHub actor (User, Bot, Organization)
+// graphQLActor represents any GitHub actor (User, Bot, Organization).
 type graphQLActor struct {
 	Login string `json:"login"`
 	ID    string `json:"id,omitempty"`
 }
 
-// isBotFromGraphQL determines if an actor is a bot
+// isBotFromGraphQL determines if an actor is a bot.
 func isBotFromGraphQL(actor graphQLActor) bool {
 	if actor.Login == "" {
 		return false
@@ -651,8 +666,8 @@ func isBotFromGraphQL(actor graphQLActor) bool {
 	// Check for bot patterns in login
 	login := actor.Login
 	if strings.HasSuffix(login, "[bot]") ||
-	   strings.HasSuffix(login, "-bot") ||
-	   strings.HasSuffix(login, "-robot") {
+		strings.HasSuffix(login, "-bot") ||
+		strings.HasSuffix(login, "-robot") {
 		return true
 	}
 	// In GraphQL, bots have different IDs than users
@@ -661,46 +676,38 @@ func isBotFromGraphQL(actor graphQLActor) bool {
 	return strings.HasPrefix(actor.ID, "BOT_") || strings.Contains(actor.ID, "Bot")
 }
 
-// graphQLStatusCheckNode can be either CheckRun or StatusContext
+// graphQLStatusCheckNode can be either CheckRun or StatusContext.
 type graphQLStatusCheckNode struct {
-	TypeName    string     `json:"__typename"`
-	Name        string     `json:"name,omitempty"`        // CheckRun
-	Status      string     `json:"status,omitempty"`      // CheckRun
-	Conclusion  string     `json:"conclusion,omitempty"`  // CheckRun
-	StartedAt   *time.Time `json:"startedAt,omitempty"`   // CheckRun
-	CompletedAt *time.Time `json:"completedAt,omitempty"` // CheckRun
-	DetailsURL  string     `json:"detailsUrl,omitempty"`  // CheckRun
-	Title       string     `json:"title,omitempty"`       // CheckRun
-	Text        string     `json:"text,omitempty"`        // CheckRun
-	Summary     string     `json:"summary,omitempty"`     // CheckRun
-	DatabaseID  int        `json:"databaseId,omitempty"`  // CheckRun
+	StartedAt   *time.Time    `json:"startedAt,omitempty"`   // CheckRun
+	CompletedAt *time.Time    `json:"completedAt,omitempty"` // CheckRun
+	CreatedAt   *time.Time    `json:"createdAt,omitempty"`   // StatusContext
+	Creator     *graphQLActor `json:"creator,omitempty"`     // StatusContext
 	App         *struct {
 		Name       string `json:"name"`
 		DatabaseID int    `json:"databaseId"`
 	} `json:"app,omitempty"` // CheckRun
-
-	Context     string        `json:"context,omitempty"`     // StatusContext
-	State       string        `json:"state,omitempty"`       // StatusContext
-	Description string        `json:"description,omitempty"` // StatusContext
-	TargetURL   string        `json:"targetUrl,omitempty"`   // StatusContext
-	CreatedAt   *time.Time    `json:"createdAt,omitempty"`   // StatusContext
-	Creator     *graphQLActor `json:"creator,omitempty"`     // StatusContext
+	TypeName    string `json:"__typename"`
+	Name        string `json:"name,omitempty"`        // CheckRun
+	Status      string `json:"status,omitempty"`      // CheckRun
+	Conclusion  string `json:"conclusion,omitempty"`  // CheckRun
+	DetailsURL  string `json:"detailsUrl,omitempty"`  // CheckRun
+	Title       string `json:"title,omitempty"`       // CheckRun
+	Text        string `json:"text,omitempty"`        // CheckRun
+	Summary     string `json:"summary,omitempty"`     // CheckRun
+	Context     string `json:"context,omitempty"`     // StatusContext
+	State       string `json:"state,omitempty"`       // StatusContext
+	Description string `json:"description,omitempty"` // StatusContext
+	TargetURL   string `json:"targetUrl,omitempty"`   // StatusContext
+	DatabaseID  int    `json:"databaseId,omitempty"`  // CheckRun
 }
 
-// graphQLPageInfo for pagination
+// graphQLPageInfo for pagination.
 type graphQLPageInfo struct {
-	HasNextPage bool   `json:"hasNextPage"`
 	EndCursor   string `json:"endCursor"`
+	HasNextPage bool   `json:"hasNextPage"`
 }
 
-// graphQLReviewerNode can be User, Team, or Bot
-type graphQLReviewerNode struct {
-	Login string `json:"login,omitempty"` // User/Bot
-	Name  string `json:"name,omitempty"`  // Team
-	ID    string `json:"id"`
-}
-
-// convertGraphQLToPullRequest converts GraphQL data to PullRequest
+// convertGraphQLToPullRequest converts GraphQL data to PullRequest.
 func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLPullRequestComplete, owner, repo string) PullRequest {
 	pr := PullRequest{
 		Number:       data.Number,
@@ -767,7 +774,7 @@ func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLP
 	return pr
 }
 
-// convertGraphQLToEvents converts GraphQL data to Events
+// convertGraphQLToEvents converts GraphQL data to Events.
 func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graphQLPullRequestComplete, owner, repo string) []Event {
 	var events []Event
 
@@ -798,7 +805,8 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 	}
 
 	// Reviews
-	for _, review := range data.Reviews.Nodes {
+	for i := range data.Reviews.Nodes {
+		review := &data.Reviews.Nodes[i]
 		if review.State == "" {
 			continue
 		}
@@ -851,19 +859,21 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 
 	// Status checks and check runs
 	if data.HeadRef.Target.StatusCheckRollup != nil {
-		for _, node := range data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes {
+		for i := range data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes {
+			node := &data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes[i]
 			switch node.TypeName {
 			case "CheckRun":
 				var timestamp time.Time
 				var outcome string
 
-				if node.CompletedAt != nil {
+				switch {
+				case node.CompletedAt != nil:
 					timestamp = *node.CompletedAt
 					outcome = strings.ToLower(node.Conclusion)
-				} else if node.StartedAt != nil {
+				case node.StartedAt != nil:
 					timestamp = *node.StartedAt
 					outcome = strings.ToLower(node.Status)
-				} else {
+				default:
 					continue
 				}
 
@@ -905,6 +915,8 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 					event.Bot = isBotFromGraphQL(*node.Creator)
 				}
 				events = append(events, event)
+			default:
+				// Unknown check type, skip
 			}
 		}
 	}
@@ -933,9 +945,12 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 	return events
 }
 
-// parseGraphQLTimelineEvent parses a single timeline event
-func (c *Client) parseGraphQLTimelineEvent(ctx context.Context, item map[string]interface{}, owner, repo string) *Event {
-	typename, _ := item["__typename"].(string)
+// parseGraphQLTimelineEvent parses a single timeline event.
+func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[string]any, _ /* owner */, _ /* repo */ string) *Event {
+	typename, ok := item["__typename"].(string)
+	if !ok {
+		return nil
+	}
 
 	// Helper to extract time
 	getTime := func(key string) *time.Time {
@@ -949,7 +964,7 @@ func (c *Client) parseGraphQLTimelineEvent(ctx context.Context, item map[string]
 
 	// Helper to extract actor
 	getActor := func() string {
-		if actor, ok := item["actor"].(map[string]interface{}); ok {
+		if actor, ok := item["actor"].(map[string]any); ok {
 			if login, ok := actor["login"].(string); ok {
 				return login
 			}
@@ -970,39 +985,51 @@ func (c *Client) parseGraphQLTimelineEvent(ctx context.Context, item map[string]
 	switch typename {
 	case "AssignedEvent":
 		event.Kind = "assigned"
-		if assignee, ok := item["assignee"].(map[string]interface{}); ok {
-			event.Target, _ = assignee["login"].(string)
+		if assignee, ok := item["assignee"].(map[string]any); ok {
+			if login, ok := assignee["login"].(string); ok {
+				event.Target = login
+			}
 		}
 
 	case "UnassignedEvent":
 		event.Kind = "unassigned"
-		if assignee, ok := item["assignee"].(map[string]interface{}); ok {
-			event.Target, _ = assignee["login"].(string)
+		if assignee, ok := item["assignee"].(map[string]any); ok {
+			if login, ok := assignee["login"].(string); ok {
+				event.Target = login
+			}
 		}
 
 	case "LabeledEvent":
 		event.Kind = "labeled"
-		if label, ok := item["label"].(map[string]interface{}); ok {
-			event.Target, _ = label["name"].(string)
+		if label, ok := item["label"].(map[string]any); ok {
+			if name, ok := label["name"].(string); ok {
+				event.Target = name
+			}
 		}
 
 	case "UnlabeledEvent":
 		event.Kind = "unlabeled"
-		if label, ok := item["label"].(map[string]interface{}); ok {
-			event.Target, _ = label["name"].(string)
+		if label, ok := item["label"].(map[string]any); ok {
+			if name, ok := label["name"].(string); ok {
+				event.Target = name
+			}
 		}
 
 	case "MilestonedEvent":
 		event.Kind = "milestoned"
-		event.Target, _ = item["milestoneTitle"].(string)
+		if title, ok := item["milestoneTitle"].(string); ok {
+			event.Target = title
+		}
 
 	case "DemilestonedEvent":
 		event.Kind = "demilestoned"
-		event.Target, _ = item["milestoneTitle"].(string)
+		if title, ok := item["milestoneTitle"].(string); ok {
+			event.Target = title
+		}
 
 	case "ReviewRequestedEvent":
 		event.Kind = "review_requested"
-		if reviewer, ok := item["requestedReviewer"].(map[string]interface{}); ok {
+		if reviewer, ok := item["requestedReviewer"].(map[string]any); ok {
 			if login, ok := reviewer["login"].(string); ok {
 				event.Target = login
 			} else if name, ok := reviewer["name"].(string); ok {
@@ -1012,7 +1039,7 @@ func (c *Client) parseGraphQLTimelineEvent(ctx context.Context, item map[string]
 
 	case "ReviewRequestRemovedEvent":
 		event.Kind = "review_request_removed"
-		if reviewer, ok := item["requestedReviewer"].(map[string]interface{}); ok {
+		if reviewer, ok := item["requestedReviewer"].(map[string]any); ok {
 			if login, ok := reviewer["login"].(string); ok {
 				event.Target = login
 			} else if name, ok := reviewer["name"].(string); ok {
@@ -1047,8 +1074,8 @@ func (c *Client) parseGraphQLTimelineEvent(ctx context.Context, item map[string]
 	return event
 }
 
-// writeAccessFromAssociation calculates write access from association
-func (c *Client) writeAccessFromAssociation(ctx context.Context, owner, repo, user, association string) int {
+// writeAccessFromAssociation calculates write access from association.
+func (*Client) writeAccessFromAssociation(_ /* ctx */ context.Context, _ /* owner */, _ /* repo */, user, association string) int {
 	if user == "" {
 		return WriteAccessNA
 	}
@@ -1068,8 +1095,8 @@ func (c *Client) writeAccessFromAssociation(ctx context.Context, owner, repo, us
 	}
 }
 
-// extractRequiredChecksFromGraphQL gets required checks from GraphQL response
-func (c *Client) extractRequiredChecksFromGraphQL(data *graphQLPullRequestComplete) []string {
+// extractRequiredChecksFromGraphQL gets required checks from GraphQL response.
+func (*Client) extractRequiredChecksFromGraphQL(data *graphQLPullRequestComplete) []string {
 	checkMap := make(map[string]bool)
 
 	// From refUpdateRule
@@ -1093,23 +1120,24 @@ func (c *Client) extractRequiredChecksFromGraphQL(data *graphQLPullRequestComple
 	return checks
 }
 
-// calculateTestStateFromGraphQL determines test state from check runs
-func (c *Client) calculateTestStateFromGraphQL(data *graphQLPullRequestComplete) string {
+// calculateTestStateFromGraphQL determines test state from check runs.
+func (*Client) calculateTestStateFromGraphQL(data *graphQLPullRequestComplete) string {
 	if data.HeadRef.Target.StatusCheckRollup == nil {
 		return ""
 	}
 
 	var hasFailure, hasRunning, hasQueued bool
 
-	for _, node := range data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes {
+	for i := range data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes {
+		node := &data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes[i]
 		if node.TypeName != "CheckRun" {
 			continue
 		}
 
 		// Only consider test-related check runs
 		if !strings.Contains(strings.ToLower(node.Name), "test") &&
-		   !strings.Contains(strings.ToLower(node.Name), "check") &&
-		   !strings.Contains(strings.ToLower(node.Name), "ci") {
+			!strings.Contains(strings.ToLower(node.Name), "check") &&
+			!strings.Contains(strings.ToLower(node.Name), "ci") {
 			continue
 		}
 
@@ -1118,11 +1146,15 @@ func (c *Client) calculateTestStateFromGraphQL(data *graphQLPullRequestComplete)
 			hasQueued = true
 		case "in_progress":
 			hasRunning = true
+		default:
+			// Other status
 		}
 
 		switch strings.ToLower(node.Conclusion) {
 		case "failure", "timed_out", "action_required":
 			hasFailure = true
+		default:
+			// Other conclusion
 		}
 	}
 

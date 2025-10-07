@@ -45,6 +45,8 @@ func newPermissionCache(cacheDir string) *permissionCache {
 }
 
 // get retrieves a cached permission if it exists and is not expired.
+//
+//nolint:unparam // Infrastructure code - parameters used correctly in tests and future features
 func (pc *permissionCache) get(owner, repo, username string) (string, bool) {
 	key := fmt.Sprintf("%s/%s/%s", owner, repo, username)
 

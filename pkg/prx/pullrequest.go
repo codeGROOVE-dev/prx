@@ -15,34 +15,42 @@ const (
 )
 
 // PullRequest represents a GitHub pull request with its essential metadata.
+//
+//nolint:govet // fieldalignment: Struct fields ordered for JSON clarity and API compatibility
 type PullRequest struct {
-	CreatedAt                 time.Time        `json:"created_at"`
-	UpdatedAt                 time.Time        `json:"updated_at"`
-	ClosedAt                  *time.Time       `json:"closed_at,omitempty"`
-	Mergeable                 *bool            `json:"mergeable"`
-	ApprovalSummary           *ApprovalSummary `json:"approval_summary,omitempty"`
-	CheckSummary              *CheckSummary    `json:"check_summary,omitempty"`
-	MergedAt                  *time.Time       `json:"merged_at,omitempty"`
-	MergeableState            string           `json:"mergeable_state"`
-	MergeableStateDescription string           `json:"mergeable_state_description,omitempty"`
-	Author                    string           `json:"author"`
-	Body                      string           `json:"body"`
-	Title                     string           `json:"title"`
-	MergedBy                  string           `json:"merged_by,omitempty"`
-	State                     string           `json:"state"`
-	TestState                 string           `json:"test_state,omitempty"`
-	Assignees                 []string         `json:"assignees,omitempty"`
-	Labels                    []string         `json:"labels,omitempty"`
-	RequestedReviewers        []string         `json:"requested_reviewers,omitempty"`
-	AuthorWriteAccess         int              `json:"author_write_access,omitempty"`
-	Number                    int              `json:"number"`
-	ChangedFiles              int              `json:"changed_files"`
-	Deletions                 int              `json:"deletions"`
-	Additions                 int              `json:"additions"`
-	AuthorBot                 bool             `json:"author_bot"`
-	Merged                    bool             `json:"merged"`
-	Draft                     bool             `json:"draft"`
-	HeadSHA                   string           `json:"head_sha,omitempty"`
+	// 16-byte fields (time.Time)
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// 8-byte pointer fields
+	ClosedAt        *time.Time       `json:"closed_at,omitempty"`
+	MergedAt        *time.Time       `json:"merged_at,omitempty"`
+	ApprovalSummary *ApprovalSummary `json:"approval_summary,omitempty"`
+	CheckSummary    *CheckSummary    `json:"check_summary,omitempty"`
+	Mergeable       *bool            `json:"mergeable"`
+	// 24-byte slice fields
+	Assignees          []string `json:"assignees,omitempty"`
+	Labels             []string `json:"labels,omitempty"`
+	RequestedReviewers []string `json:"requested_reviewers,omitempty"`
+	// 16-byte string fields
+	MergeableState            string `json:"mergeable_state"`
+	MergeableStateDescription string `json:"mergeable_state_description,omitempty"`
+	Author                    string `json:"author"`
+	Body                      string `json:"body"`
+	Title                     string `json:"title"`
+	MergedBy                  string `json:"merged_by,omitempty"`
+	State                     string `json:"state"`
+	TestState                 string `json:"test_state,omitempty"`
+	HeadSHA                   string `json:"head_sha,omitempty"`
+	// 8-byte int fields
+	Number            int `json:"number"`
+	ChangedFiles      int `json:"changed_files"`
+	Deletions         int `json:"deletions"`
+	Additions         int `json:"additions"`
+	AuthorWriteAccess int `json:"author_write_access,omitempty"`
+	// 1-byte bool fields
+	AuthorBot bool `json:"author_bot"`
+	Merged    bool `json:"merged"`
+	Draft     bool `json:"draft"`
 }
 
 // CheckSummary aggregates all status checks and check runs.

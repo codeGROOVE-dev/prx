@@ -1,6 +1,8 @@
+// Package main provides a comparison utility for REST vs GraphQL PR fetching.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +15,11 @@ import (
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
 )
 
+const (
+	defaultPRNumber       = 1359
+	truncateDisplayLength = 50
+)
+
 func main() {
 	var token string
 	var owner string
@@ -22,7 +29,7 @@ func main() {
 	flag.StringVar(&token, "token", os.Getenv("GITHUB_TOKEN"), "GitHub token")
 	flag.StringVar(&owner, "owner", "oxidecomputer", "Repository owner")
 	flag.StringVar(&repo, "repo", "dropshot", "Repository name")
-	flag.IntVar(&prNumber, "pr", 1359, "Pull request number")
+	flag.IntVar(&prNumber, "pr", defaultPRNumber, "Pull request number")
 	flag.Parse()
 
 	if token == "" {
@@ -32,7 +39,7 @@ func main() {
 	// Both now use GraphQL, but we'll compare two fetches to ensure consistency
 	fmt.Println("Fetching first time...")
 	restClient := prx.NewClient(token)
-	restData, err := restClient.PullRequest(nil, owner, repo, prNumber)
+	restData, err := restClient.PullRequest(context.TODO(), owner, repo, prNumber)
 	if err != nil {
 		log.Fatalf("First fetch failed: %v", err)
 	}
@@ -40,7 +47,7 @@ func main() {
 	// Fetch again to compare consistency
 	fmt.Println("Fetching second time...")
 	graphqlClient := prx.NewClient(token)
-	graphqlData, err := graphqlClient.PullRequest(nil, owner, repo, prNumber)
+	graphqlData, err := graphqlClient.PullRequest(context.TODO(), owner, repo, prNumber)
 	if err != nil {
 		log.Fatalf("Second fetch failed: %v", err)
 	}
@@ -66,85 +73,7 @@ func comparePullRequestData(rest, graphql *prx.PullRequestData) {
 }
 
 func comparePullRequest(rest, graphql *prx.PullRequest) {
-	// Use reflection to compare all fields
-	restVal := reflect.ValueOf(*rest)
-	graphqlVal := reflect.ValueOf(*graphql)
-	restType := restVal.Type()
-
-	differences := []string{}
-	matches := []string{}
-
-	for i := 0; i < restVal.NumField(); i++ {
-		field := restType.Field(i)
-		restField := restVal.Field(i)
-		graphqlField := graphqlVal.Field(i)
-
-		// Special handling for pointer fields
-		if restField.Kind() == reflect.Ptr {
-			if restField.IsNil() != graphqlField.IsNil() {
-				differences = append(differences, fmt.Sprintf("  %s: REST=%v, GraphQL=%v",
-					field.Name, restField.IsNil(), graphqlField.IsNil()))
-				continue
-			}
-			if !restField.IsNil() {
-				restField = restField.Elem()
-				graphqlField = graphqlField.Elem()
-			}
-		}
-
-		// Compare values
-		if !reflect.DeepEqual(restField.Interface(), graphqlField.Interface()) {
-			// Special handling for CheckSummary and ApprovalSummary
-			if field.Name == "CheckSummary" || field.Name == "ApprovalSummary" {
-				fmt.Printf("  %s:\n", field.Name)
-				if field.Name == "CheckSummary" && rest.CheckSummary != nil && graphql.CheckSummary != nil {
-					fmt.Printf("    REST:    Success=%d, Failing=%d, Pending=%d, Cancelled=%d, Skipped=%d, Stale=%d, Neutral=%d\n",
-						len(rest.CheckSummary.Success), len(rest.CheckSummary.Failing),
-						len(rest.CheckSummary.Pending), len(rest.CheckSummary.Cancelled),
-						len(rest.CheckSummary.Skipped), len(rest.CheckSummary.Stale), len(rest.CheckSummary.Neutral))
-					fmt.Printf("    GraphQL: Success=%d, Failing=%d, Pending=%d, Cancelled=%d, Skipped=%d, Stale=%d, Neutral=%d\n",
-						len(graphql.CheckSummary.Success), len(graphql.CheckSummary.Failing),
-						len(graphql.CheckSummary.Pending), len(graphql.CheckSummary.Cancelled),
-						len(graphql.CheckSummary.Skipped), len(graphql.CheckSummary.Stale), len(graphql.CheckSummary.Neutral))
-
-					// Compare status maps
-					if len(rest.CheckSummary.Success) > 0 || len(graphql.CheckSummary.Success) > 0 {
-						fmt.Println("    Success:")
-						compareStatusMaps(rest.CheckSummary.Success, graphql.CheckSummary.Success)
-					}
-					if len(rest.CheckSummary.Failing) > 0 || len(graphql.CheckSummary.Failing) > 0 {
-						fmt.Println("    Failing:")
-						compareStatusMaps(rest.CheckSummary.Failing, graphql.CheckSummary.Failing)
-					}
-					if len(rest.CheckSummary.Pending) > 0 || len(graphql.CheckSummary.Pending) > 0 {
-						fmt.Println("    Pending:")
-						compareStatusMaps(rest.CheckSummary.Pending, graphql.CheckSummary.Pending)
-					}
-					if len(rest.CheckSummary.Cancelled) > 0 || len(graphql.CheckSummary.Cancelled) > 0 {
-						fmt.Println("    Cancelled:")
-						compareStatusMaps(rest.CheckSummary.Cancelled, graphql.CheckSummary.Cancelled)
-					}
-					if len(rest.CheckSummary.Skipped) > 0 || len(graphql.CheckSummary.Skipped) > 0 {
-						fmt.Println("    Skipped:")
-						compareStatusMaps(rest.CheckSummary.Skipped, graphql.CheckSummary.Skipped)
-					}
-					if len(rest.CheckSummary.Stale) > 0 || len(graphql.CheckSummary.Stale) > 0 {
-						fmt.Println("    Stale:")
-						compareStatusMaps(rest.CheckSummary.Stale, graphql.CheckSummary.Stale)
-					}
-					if len(rest.CheckSummary.Neutral) > 0 || len(graphql.CheckSummary.Neutral) > 0 {
-						fmt.Println("    Neutral:")
-						compareStatusMaps(rest.CheckSummary.Neutral, graphql.CheckSummary.Neutral)
-					}
-				}
-			} else {
-				differences = append(differences, fmt.Sprintf("  %s: REST=%v, GraphQL=%v",
-					field.Name, restField.Interface(), graphqlField.Interface()))
-			}
-		} else {
-			matches = append(matches, field.Name)
-		}
-	}
+	differences, matches := compareFields(rest, graphql)
 
 	if len(differences) > 0 {
 		fmt.Println("Differences found:")
@@ -154,6 +83,86 @@ func comparePullRequest(rest, graphql *prx.PullRequest) {
 	}
 
 	fmt.Printf("\nMatching fields: %s\n", strings.Join(matches, ", "))
+}
+
+func compareFields(rest, graphql *prx.PullRequest) (differences, matches []string) {
+	restVal := reflect.ValueOf(*rest)
+	graphqlVal := reflect.ValueOf(*graphql)
+	restType := restVal.Type()
+
+	for i := range restVal.NumField() {
+		field := restType.Field(i)
+		restField := restVal.Field(i)
+		graphqlField := graphqlVal.Field(i)
+
+		// Special handling for pointer fields
+		if restField.Kind() == reflect.Ptr {
+			if diff := comparePointerField(field.Name, restField, graphqlField); diff != "" {
+				differences = append(differences, diff)
+				continue
+			}
+		}
+
+		// Compare values
+		if !reflect.DeepEqual(restField.Interface(), graphqlField.Interface()) {
+			if field.Name == "CheckSummary" {
+				compareCheckSummary(rest, graphql)
+			} else {
+				differences = append(differences, fmt.Sprintf("  %s: REST=%v, GraphQL=%v",
+					field.Name, restField.Interface(), graphqlField.Interface()))
+			}
+		} else {
+			matches = append(matches, field.Name)
+		}
+	}
+
+	return differences, matches
+}
+
+func comparePointerField(name string, restField, graphqlField reflect.Value) string {
+	if restField.IsNil() != graphqlField.IsNil() {
+		return fmt.Sprintf("  %s: REST=%v, GraphQL=%v", name, restField.IsNil(), graphqlField.IsNil())
+	}
+	if !restField.IsNil() {
+		restField.Elem()
+		graphqlField.Elem()
+	}
+	return ""
+}
+
+func compareCheckSummary(rest, graphql *prx.PullRequest) {
+	if rest.CheckSummary == nil || graphql.CheckSummary == nil {
+		return
+	}
+
+	fmt.Println("  CheckSummary:")
+	fmt.Printf("    REST:    Success=%d, Failing=%d, Pending=%d, Cancelled=%d, Skipped=%d, Stale=%d, Neutral=%d\n",
+		len(rest.CheckSummary.Success), len(rest.CheckSummary.Failing),
+		len(rest.CheckSummary.Pending), len(rest.CheckSummary.Cancelled),
+		len(rest.CheckSummary.Skipped), len(rest.CheckSummary.Stale), len(rest.CheckSummary.Neutral))
+	fmt.Printf("    GraphQL: Success=%d, Failing=%d, Pending=%d, Cancelled=%d, Skipped=%d, Stale=%d, Neutral=%d\n",
+		len(graphql.CheckSummary.Success), len(graphql.CheckSummary.Failing),
+		len(graphql.CheckSummary.Pending), len(graphql.CheckSummary.Cancelled),
+		len(graphql.CheckSummary.Skipped), len(graphql.CheckSummary.Stale), len(graphql.CheckSummary.Neutral))
+
+	compareCheckSummaryMaps(rest.CheckSummary, graphql.CheckSummary)
+}
+
+func compareCheckSummaryMaps(rest, graphql *prx.CheckSummary) {
+	compareSummaryMap("Success", rest.Success, graphql.Success)
+	compareSummaryMap("Failing", rest.Failing, graphql.Failing)
+	compareSummaryMap("Pending", rest.Pending, graphql.Pending)
+	compareSummaryMap("Cancelled", rest.Cancelled, graphql.Cancelled)
+	compareSummaryMap("Skipped", rest.Skipped, graphql.Skipped)
+	compareSummaryMap("Stale", rest.Stale, graphql.Stale)
+	compareSummaryMap("Neutral", rest.Neutral, graphql.Neutral)
+}
+
+func compareSummaryMap(name string, rest, graphql map[string]string) {
+	if len(rest) > 0 || len(graphql) > 0 {
+		fmt.Printf("    %s:\n", name)
+		compareStatusMaps(rest, graphql)
+	}
 }
 
 func compareStatusMaps(rest, graphql map[string]string) {
@@ -229,20 +238,22 @@ func compareEvents(restEvents, graphqlEvents []prx.Event) {
 			maxShow := 3
 			if len(restTypeEvents) > 0 && len(restTypeEvents) <= maxShow {
 				fmt.Println("  REST events:")
-				for i, e := range restTypeEvents {
+				for i := range restTypeEvents {
 					if i >= maxShow {
 						break
 					}
-					fmt.Printf("    - %s by %s: %s\n", e.Timestamp.Format("2006-01-02 15:04"), e.Actor, truncate(e.Body, 50))
+					e := &restTypeEvents[i]
+					fmt.Printf("    - %s by %s: %s\n", e.Timestamp.Format("2006-01-02 15:04"), e.Actor, truncate(e.Body, truncateDisplayLength))
 				}
 			}
 			if len(graphqlTypeEvents) > 0 && len(graphqlTypeEvents) <= maxShow {
 				fmt.Println("  GraphQL events:")
-				for i, e := range graphqlTypeEvents {
+				for i := range graphqlTypeEvents {
 					if i >= maxShow {
 						break
 					}
-					fmt.Printf("    - %s by %s: %s\n", e.Timestamp.Format("2006-01-02 15:04"), e.Actor, truncate(e.Body, 50))
+					e := &graphqlTypeEvents[i]
+					fmt.Printf("    - %s by %s: %s\n", e.Timestamp.Format("2006-01-02 15:04"), e.Actor, truncate(e.Body, truncateDisplayLength))
 				}
 			}
 		}
@@ -284,23 +295,24 @@ func compareEvents(restEvents, graphqlEvents []prx.Event) {
 
 func countEventsByType(events []prx.Event) map[string]int {
 	counts := make(map[string]int)
-	for _, e := range events {
-		counts[e.Kind]++
+	for i := range events {
+		counts[events[i].Kind]++
 	}
 	return counts
 }
 
 func groupEventsByType(events []prx.Event) map[string][]prx.Event {
 	grouped := make(map[string][]prx.Event)
-	for _, e := range events {
-		grouped[e.Kind] = append(grouped[e.Kind], e)
+	for i := range events {
+		grouped[events[i].Kind] = append(grouped[events[i].Kind], events[i])
 	}
 	return grouped
 }
 
 func extractWriteAccess(events []prx.Event) map[string]int {
 	access := make(map[string]int)
-	for _, e := range events {
+	for i := range events {
+		e := &events[i]
 		if e.Actor != "" && e.WriteAccess != 0 {
 			// Keep the highest access level seen
 			if current, exists := access[e.Actor]; !exists || e.WriteAccess > current {
@@ -313,7 +325,8 @@ func extractWriteAccess(events []prx.Event) map[string]int {
 
 func extractBots(events []prx.Event) map[string]bool {
 	bots := make(map[string]bool)
-	for _, e := range events {
+	for i := range events {
+		e := &events[i]
 		if e.Actor != "" {
 			bots[e.Actor] = e.Bot
 		}
@@ -328,13 +341,17 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func saveJSON(filename string, data interface{}) {
+func saveJSON(filename string, data any) {
 	file, err := os.Create(filename)
 	if err != nil {
 		log.Printf("Failed to create %s: %v", filename, err)
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Failed to close %s: %v", filename, err)
+		}
+	}()
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")

@@ -382,34 +382,6 @@ type githubRuleset struct {
 	ID int `json:"id"`
 }
 
-// githubWorkflows represents the list of workflows in a repository.
-type githubWorkflows struct {
-	Workflows []githubWorkflow `json:"workflows"`
-}
-
-// githubWorkflow represents a GitHub Actions workflow.
-type githubWorkflow struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	State string `json:"state"`
-	URL   string `json:"url"`
-	ID    int    `json:"id"`
-}
-
-// githubWorkflowRuns represents workflow runs for a specific commit.
-type githubWorkflowRuns struct {
-	WorkflowRuns []githubWorkflowRun `json:"workflow_runs"`
-}
-
-// githubWorkflowRun represents a single workflow run.
-type githubWorkflowRun struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	URL        string `json:"url"`
-	ID         int    `json:"id"`
-}
-
 // githubCombinedStatus represents the combined status for a commit.
 type githubCombinedStatus struct {
 	State    string `json:"state"`
