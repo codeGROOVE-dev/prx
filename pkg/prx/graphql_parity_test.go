@@ -22,10 +22,10 @@ func TestGraphQLParity(t *testing.T) {
 	repo := "go"
 	prNumber := 1
 
-	// Fetch via REST
-	restData, err := client.pullRequestImpl(ctx, owner, repo, prNumber, nil)
+	// Fetch via direct call (non-cached)
+	restData, err := client.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
 	if err != nil {
-		t.Fatalf("REST fetch failed: %v", err)
+		t.Fatalf("Direct fetch failed: %v", err)
 	}
 
 	// Fetch via GraphQL
@@ -144,7 +144,7 @@ func compareEvents(t *testing.T, restEvents, graphqlEvents []Event) {
 }
 
 // assertEqual is a test helper
-func assertEqual(t *testing.T, field string, expected, actual interface{}) {
+func assertEqual(t *testing.T, field string, expected, actual any) {
 	t.Helper()
 	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf("%s mismatch: expected=%v, actual=%v", field, expected, actual)
@@ -199,7 +199,10 @@ func TestGraphQLBotDetection(t *testing.T) {
 // TestWriteAccessMapping tests the write access calculation
 func TestWriteAccessMapping(t *testing.T) {
 	ctx := context.Background()
-	c := &Client{logger: slog.Default()}
+	c := &Client{
+		logger:             slog.Default(),
+		collaboratorsCache: &collaboratorsCache{memory: make(map[string]collaboratorsEntry)},
+	}
 
 	tests := []struct {
 		association string
@@ -207,7 +210,7 @@ func TestWriteAccessMapping(t *testing.T) {
 	}{
 		{"OWNER", WriteAccessDefinitely},
 		{"COLLABORATOR", WriteAccessDefinitely},
-		{"MEMBER", WriteAccessLikely}, // Would need REST API check
+		{"MEMBER", WriteAccessLikely}, // Falls back to likely when collaborators API unavailable
 		{"CONTRIBUTOR", WriteAccessUnlikely},
 		{"NONE", WriteAccessUnlikely},
 		{"FIRST_TIME_CONTRIBUTOR", WriteAccessUnlikely},

@@ -50,18 +50,18 @@ func (m *mockGithubClient) raw(ctx context.Context, path string) (json.RawMessag
 	return json.RawMessage("[]"), &githubResponse{NextPage: 0}, nil
 }
 
-func (m *mockGithubClient) userPermission(ctx context.Context, owner, repo, username string) (string, error) {
-	path := "/repos/" + owner + "/" + repo + "/collaborators/" + username + "/permission"
+func (m *mockGithubClient) collaborators(ctx context.Context, owner, repo string) (map[string]string, error) {
+	path := "/repos/" + owner + "/" + repo + "/collaborators"
 	m.calls = append(m.calls, path)
 
 	if response, ok := m.responses[path]; ok {
-		if perm, ok := response.(string); ok {
-			return perm, nil
+		if collabs, ok := response.(map[string]string); ok {
+			return collabs, nil
 		}
 	}
 
-	// Default to read access
-	return "read", nil
+	// Default to empty map
+	return make(map[string]string), nil
 }
 
 func TestClientWithMock(t *testing.T) {
@@ -114,8 +114,8 @@ func TestClientWithMock(t *testing.T) {
 	client := &Client{
 		github: mock,
 		logger: slog.Default(),
-		permissionCache: &permissionCache{
-			memory: make(map[string]permissionEntry),
+		collaboratorsCache: &collaboratorsCache{
+			memory: make(map[string]collaboratorsEntry),
 		},
 	}
 

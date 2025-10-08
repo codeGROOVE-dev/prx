@@ -189,21 +189,48 @@ func (c *githubClient) raw(ctx context.Context, path string) (json.RawMessage, *
 	return json.RawMessage(data), resp, nil
 }
 
-// userPermission gets the permission level for a user on a repository.
-// Returns "admin", "write", "read", or "none".
-func (c *githubClient) userPermission(ctx context.Context, owner, repo, username string) (string, error) {
-	path := fmt.Sprintf("/repos/%s/%s/collaborators/%s/permission", owner, repo, username)
+// collaborators fetches all users with repository access and their permission levels.
+// Returns a map of username -> permission level ("admin", "write", "read", "none").
+// Uses affiliation=all to include direct collaborators, org members, and outside collaborators.
+func (c *githubClient) collaborators(ctx context.Context, owner, repo string) (map[string]string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/collaborators?affiliation=all&per_page=100", owner, repo)
 
-	var permResp struct {
-		Permission string `json:"permission"`
+	type collaborator struct {
+		Login       string `json:"login"`
+		Permissions struct {
+			Admin    bool `json:"admin"`
+			Maintain bool `json:"maintain"`
+			Push     bool `json:"push"`
+			Triage   bool `json:"triage"`
+			Pull     bool `json:"pull"`
+		} `json:"permissions"`
 	}
 
-	if _, err := c.get(ctx, path, &permResp); err != nil {
-		// Return the error so caller can handle it appropriately
-		return "", err
+	var collabs []collaborator
+	if _, err := c.get(ctx, path, &collabs); err != nil {
+		return nil, err
 	}
 
-	return permResp.Permission, nil
+	result := make(map[string]string, len(collabs))
+	for _, collab := range collabs {
+		// Determine permission level from boolean flags
+		switch {
+		case collab.Permissions.Admin:
+			result[collab.Login] = "admin"
+		case collab.Permissions.Maintain:
+			result[collab.Login] = "maintain"
+		case collab.Permissions.Push:
+			result[collab.Login] = "write"
+		case collab.Permissions.Triage:
+			result[collab.Login] = "triage"
+		case collab.Permissions.Pull:
+			result[collab.Login] = "read"
+		default:
+			result[collab.Login] = "none"
+		}
+	}
+
+	return result, nil
 }
 
 // githubResponse wraps a GitHub API response.

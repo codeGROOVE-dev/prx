@@ -55,8 +55,8 @@ func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient
 	opts = append(opts, WithNoCache())
 	client := NewClient(token, opts...)
 
-	// Initialize permission cache with disk persistence for CacheClient
-	client.permissionCache = newPermissionCache(cleanPath)
+	// Initialize cache with disk persistence for CacheClient
+	client.collaboratorsCache = newCollaboratorsCache(cleanPath)
 
 	cc := &CacheClient{
 		Client:   client,
