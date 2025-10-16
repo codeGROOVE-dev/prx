@@ -14,6 +14,17 @@ const (
 	TestStatePending = "pending" // Some tests are pending
 )
 
+// ReviewState represents the current state of a reviewer's review.
+type ReviewState string
+
+// Review state constants.
+const (
+	ReviewStatePending          ReviewState = "pending"           // Review requested but not yet submitted
+	ReviewStateApproved         ReviewState = "approved"          // Approved
+	ReviewStateChangesRequested ReviewState = "changes_requested" // Changes requested
+	ReviewStateCommented        ReviewState = "commented"         // Reviewed with comments only
+)
+
 // PullRequest represents a GitHub pull request with its essential metadata.
 //
 //nolint:govet // fieldalignment: Struct fields ordered for JSON clarity and API compatibility
@@ -27,10 +38,10 @@ type PullRequest struct {
 	ApprovalSummary *ApprovalSummary `json:"approval_summary,omitempty"`
 	CheckSummary    *CheckSummary    `json:"check_summary,omitempty"`
 	Mergeable       *bool            `json:"mergeable"`
-	// 24-byte slice fields
-	Assignees          []string `json:"assignees,omitempty"`
-	Labels             []string `json:"labels,omitempty"`
-	RequestedReviewers []string `json:"requested_reviewers,omitempty"`
+	// 24-byte slice/map fields
+	Assignees []string               `json:"assignees,omitempty"`
+	Labels    []string               `json:"labels,omitempty"`
+	Reviewers map[string]ReviewState `json:"reviewers,omitempty"`
 	// 16-byte string fields
 	MergeableState            string `json:"mergeable_state"`
 	MergeableStateDescription string `json:"mergeable_state_description,omitempty"`

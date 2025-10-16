@@ -110,9 +110,9 @@ type PullRequest struct {
     Additions         int          `json:"additions"`
     Deletions         int          `json:"deletions"`
     ChangedFiles      int          `json:"changed_files"`
-    Assignees         []string     `json:"assignees,omitempty"`
-    RequestedReviewers []string    `json:"requested_reviewers,omitempty"`
-    Labels            []string     `json:"labels,omitempty"`
+    Assignees         []string                `json:"assignees,omitempty"`
+    Reviewers         map[string]ReviewState `json:"reviewers,omitempty"`
+    Labels            []string                `json:"labels,omitempty"`
     TestSummary       *TestSummary   `json:"test_summary,omitempty"`
     CheckSummary      *CheckSummary  `json:"check_summary,omitempty"`
 }

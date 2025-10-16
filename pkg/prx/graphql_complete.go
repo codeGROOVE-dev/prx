@@ -1028,18 +1028,54 @@ func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLP
 		pr.Labels = append(pr.Labels, label.Name)
 	}
 
-	// Requested reviewers
+	// Build reviewers map from review requests and actual reviews
+	pr.Reviewers = buildReviewersMap(data)
+
+	return pr
+}
+
+// buildReviewersMap constructs a map of reviewer login to their review state.
+// It combines data from review requests (pending) and actual reviews (approved/changes_requested/commented).
+func buildReviewersMap(data *graphQLPullRequestComplete) map[string]ReviewState {
+	reviewers := make(map[string]ReviewState)
+
+	// First, add all requested reviewers as pending
 	for _, request := range data.ReviewRequests.Nodes {
 		reviewer := request.RequestedReviewer
 		// Teams have "name", users have "login"
 		if reviewer.Login != "" {
-			pr.RequestedReviewers = append(pr.RequestedReviewers, reviewer.Login)
+			reviewers[reviewer.Login] = ReviewStatePending
 		} else if reviewer.Name != "" {
-			pr.RequestedReviewers = append(pr.RequestedReviewers, reviewer.Name)
+			reviewers[reviewer.Name] = ReviewStatePending
 		}
 	}
 
-	return pr
+	// Then, update with actual review states (latest review wins)
+	for i := range data.Reviews.Nodes {
+		review := &data.Reviews.Nodes[i]
+		if review.Author.Login == "" {
+			continue
+		}
+
+		// Map GraphQL review state to our ReviewState
+		var state ReviewState
+		switch strings.ToUpper(review.State) {
+		case "APPROVED":
+			state = ReviewStateApproved
+		case "CHANGES_REQUESTED":
+			state = ReviewStateChangesRequested
+		case "COMMENTED":
+			state = ReviewStateCommented
+		default:
+			// Skip unknown states
+			continue
+		}
+
+		// Update the reviewer's state (latest review wins)
+		reviewers[review.Author.Login] = state
+	}
+
+	return reviewers
 }
 
 // convertGraphQLToEvents converts GraphQL data to Events.
