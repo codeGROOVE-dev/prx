@@ -60,6 +60,10 @@ func WithHTTPClient(httpClient *http.Client) Option {
 func WithNoCache() Option {
 	return func(c *Client) {
 		c.cacheDir = ""
+		// Clear disk path from collaborators cache
+		c.collaboratorsCache = &collaboratorsCache{
+			memory: c.collaboratorsCache.memory, // Keep in-memory cache
+		}
 	}
 }
 
@@ -93,10 +97,20 @@ func NewClient(token string, opts ...Option) *Client {
 			api:   githubAPI,
 		},
 	}
-	// Initialize in-memory cache (no disk persistence for regular client)
-	c.collaboratorsCache = &collaboratorsCache{
-		memory: make(map[string]collaboratorsEntry),
-		// diskPath is empty, so it won't persist to disk
+	// Initialize collaborators cache with disk persistence if caching is enabled
+	if defaultCacheDir != "" {
+		if err := os.MkdirAll(defaultCacheDir, 0o700); err == nil {
+			c.collaboratorsCache = newCollaboratorsCache(defaultCacheDir)
+		} else {
+			// Fall back to in-memory only cache if directory creation fails
+			c.collaboratorsCache = &collaboratorsCache{
+				memory: make(map[string]collaboratorsEntry),
+			}
+		}
+	} else {
+		c.collaboratorsCache = &collaboratorsCache{
+			memory: make(map[string]collaboratorsEntry),
+		}
 	}
 
 	for _, opt := range opts {

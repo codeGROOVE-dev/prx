@@ -39,9 +39,10 @@ type PullRequest struct {
 	CheckSummary    *CheckSummary    `json:"check_summary,omitempty"`
 	Mergeable       *bool            `json:"mergeable"`
 	// 24-byte slice/map fields
-	Assignees []string               `json:"assignees"`
-	Labels    []string               `json:"labels,omitempty"`
-	Reviewers map[string]ReviewState `json:"reviewers,omitempty"`
+	Assignees         []string               `json:"assignees"`
+	Labels            []string               `json:"labels,omitempty"`
+	Reviewers         map[string]ReviewState `json:"reviewers,omitempty"`
+	ParticipantAccess map[string]int         `json:"participant_access,omitempty"` // Map of username to WriteAccess level
 	// 16-byte string fields
 	MergeableState            string `json:"mergeable_state"`
 	MergeableStateDescription string `json:"mergeable_state_description,omitempty"`
@@ -101,6 +102,7 @@ func finalizePullRequest(pullRequest *PullRequest, events []Event, requiredCheck
 	pullRequest.TestState = testStateFromAPI
 	pullRequest.CheckSummary = calculateCheckSummary(events, requiredChecks)
 	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
+	pullRequest.ParticipantAccess = calculateParticipantAccess(events, pullRequest)
 
 	fixTestState(pullRequest)
 	fixMergeable(pullRequest)

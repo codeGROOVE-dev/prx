@@ -179,3 +179,49 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 
 	return summary
 }
+
+// calculateParticipantAccess builds a map of all PR participants to their write access levels.
+// Includes the PR author, assignees, reviewers, and all event actors.
+func calculateParticipantAccess(events []Event, pr *PullRequest) map[string]int {
+	participants := make(map[string]int)
+
+	// Add the PR author
+	if pr.Author != "" {
+		participants[pr.Author] = pr.AuthorWriteAccess
+	}
+
+	// Add assignees (write access unknown)
+	for _, assignee := range pr.Assignees {
+		if assignee != "" {
+			if _, exists := participants[assignee]; !exists {
+				participants[assignee] = WriteAccessNA
+			}
+		}
+	}
+
+	// Add reviewers (write access unknown at this point)
+	for reviewer := range pr.Reviewers {
+		if reviewer != "" {
+			if _, exists := participants[reviewer]; !exists {
+				participants[reviewer] = WriteAccessNA
+			}
+		}
+	}
+
+	// Collect all unique actors from events and upgrade write access where known
+	for i := range events {
+		e := &events[i]
+		if e.Actor != "" {
+			// Keep the highest write access level if we see the same actor multiple times
+			if existing, ok := participants[e.Actor]; !ok {
+				// New participant
+				participants[e.Actor] = e.WriteAccess
+			} else if e.WriteAccess > existing {
+				// Upgrade to higher write access level
+				participants[e.Actor] = e.WriteAccess
+			}
+		}
+	}
+
+	return participants
+}
