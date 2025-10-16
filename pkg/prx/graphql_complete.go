@@ -1018,7 +1018,8 @@ func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLP
 		pr.AuthorWriteAccess = c.writeAccessFromAssociation(ctx, owner, repo, data.Author.Login, data.AuthorAssociation)
 	}
 
-	// Assignees
+	// Assignees (initialize to empty slice if none)
+	pr.Assignees = make([]string, 0)
 	for _, assignee := range data.Assignees.Nodes {
 		pr.Assignees = append(pr.Assignees, assignee.Login)
 	}

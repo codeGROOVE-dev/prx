@@ -39,7 +39,7 @@ type PullRequest struct {
 	CheckSummary    *CheckSummary    `json:"check_summary,omitempty"`
 	Mergeable       *bool            `json:"mergeable"`
 	// 24-byte slice/map fields
-	Assignees []string               `json:"assignees,omitempty"`
+	Assignees []string               `json:"assignees"`
 	Labels    []string               `json:"labels,omitempty"`
 	Reviewers map[string]ReviewState `json:"reviewers,omitempty"`
 	// 16-byte string fields
