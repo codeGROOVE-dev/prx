@@ -69,7 +69,10 @@ type ApprovalSummary struct {
 	// Approvals from users confirmed to have write access (owners, collaborators, members with confirmed access)
 	ApprovalsWithWriteAccess int `json:"approvals_with_write_access"`
 
-	// Approvals from users without confirmed write access (contributors, unconfirmed members, etc.)
+	// Approvals from users with unknown or likely write access (members, uncertain cases)
+	ApprovalsWithUnknownAccess int `json:"approvals_with_unknown_access"`
+
+	// Approvals from users confirmed to not have write access (contributors, outside collaborators)
 	ApprovalsWithoutWriteAccess int `json:"approvals_without_write_access"`
 
 	// Outstanding change requests from any reviewer
@@ -80,4 +83,83 @@ type ApprovalSummary struct {
 type PullRequestData struct {
 	Events      []Event     `json:"events"`
 	PullRequest PullRequest `json:"pull_request"`
+}
+
+// finalizePullRequest applies final calculations and consistency fixes.
+func finalizePullRequest(pullRequest *PullRequest, events []Event, requiredChecks []string, testStateFromAPI string) {
+	pullRequest.TestState = testStateFromAPI
+	pullRequest.CheckSummary = calculateCheckSummary(events, requiredChecks)
+	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
+
+	fixTestState(pullRequest)
+	fixMergeable(pullRequest)
+	setMergeableDescription(pullRequest)
+}
+
+// fixTestState ensures test_state is consistent with check_summary.
+func fixTestState(pullRequest *PullRequest) {
+	switch {
+	case len(pullRequest.CheckSummary.Failing) > 0 || len(pullRequest.CheckSummary.Cancelled) > 0:
+		pullRequest.TestState = TestStateFailing
+	case len(pullRequest.CheckSummary.Pending) > 0:
+		pullRequest.TestState = TestStatePending
+	case len(pullRequest.CheckSummary.Success) > 0:
+		pullRequest.TestState = TestStatePassing
+	default:
+		pullRequest.TestState = TestStateNone
+	}
+}
+
+// fixMergeable ensures mergeable is consistent with mergeable_state.
+func fixMergeable(pullRequest *PullRequest) {
+	if pullRequest.MergeableState == "blocked" || pullRequest.MergeableState == "dirty" || pullRequest.MergeableState == "unstable" {
+		falseVal := false
+		pullRequest.Mergeable = &falseVal
+	}
+}
+
+// setMergeableDescription adds human-readable description for mergeable state.
+func setMergeableDescription(pullRequest *PullRequest) {
+	switch pullRequest.MergeableState {
+	case "blocked":
+		setBlockedDescription(pullRequest)
+	case "dirty":
+		pullRequest.MergeableStateDescription = "PR has merge conflicts that need to be resolved"
+	case "unstable":
+		pullRequest.MergeableStateDescription = "PR is mergeable but status checks are failing"
+	case "clean":
+		pullRequest.MergeableStateDescription = "PR is ready to merge"
+	case "unknown":
+		pullRequest.MergeableStateDescription = "Merge status is being calculated"
+	case "draft":
+		pullRequest.MergeableStateDescription = "PR is in draft state"
+	default:
+		pullRequest.MergeableStateDescription = ""
+	}
+}
+
+// setBlockedDescription determines what's blocking the PR and sets appropriate description.
+func setBlockedDescription(pullRequest *PullRequest) {
+	hasApprovals := pullRequest.ApprovalSummary.ApprovalsWithWriteAccess > 0
+	hasFailingChecks := len(pullRequest.CheckSummary.Failing) > 0 || len(pullRequest.CheckSummary.Cancelled) > 0
+	hasPendingChecks := len(pullRequest.CheckSummary.Pending) > 0
+
+	switch {
+	case !hasApprovals && !hasFailingChecks:
+		if hasPendingChecks {
+			pullRequest.MergeableStateDescription = "PR requires approval and has pending status checks"
+		} else {
+			pullRequest.MergeableStateDescription = "PR requires approval"
+		}
+	case hasFailingChecks:
+		if !hasApprovals {
+			pullRequest.MergeableStateDescription = "PR has failing status checks and requires approval"
+		} else {
+			pullRequest.MergeableStateDescription = "PR is blocked by failing status checks"
+		}
+	case hasPendingChecks:
+		pullRequest.MergeableStateDescription = "PR is blocked by pending status checks"
+	default:
+		pullRequest.MergeableStateDescription = "PR is blocked by required status checks, reviews, or branch protection rules"
+	}
 }

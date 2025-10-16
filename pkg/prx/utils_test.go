@@ -245,6 +245,185 @@ func TestCheckSummaryInitialization(t *testing.T) {
 	}
 }
 
+func TestCalculateApprovalSummaryWriteAccessCategories(t *testing.T) {
+	tests := []struct {
+		name                      string
+		events                    []Event
+		expectedWithAccess        int
+		expectedWithUnknownAccess int
+		expectedWithoutAccess     int
+		expectedChangesRequested  int
+	}{
+		{
+			name: "approval with definite write access",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "owner-user",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessDefinitely,
+				},
+			},
+			expectedWithAccess:        1,
+			expectedWithUnknownAccess: 0,
+			expectedWithoutAccess:     0,
+			expectedChangesRequested:  0,
+		},
+		{
+			name: "approval with unknown write access (WriteAccessUnlikely)",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "external-contributor",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessUnlikely,
+				},
+			},
+			expectedWithAccess:        0,
+			expectedWithUnknownAccess: 1,
+			expectedWithoutAccess:     0,
+			expectedChangesRequested:  0,
+		},
+		{
+			name: "approval with likely write access",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "member-user",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessLikely,
+				},
+			},
+			expectedWithAccess:        0,
+			expectedWithUnknownAccess: 1,
+			expectedWithoutAccess:     0,
+			expectedChangesRequested:  0,
+		},
+		{
+			name: "approval with NA write access",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "unknown-user",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessNA,
+				},
+			},
+			expectedWithAccess:        0,
+			expectedWithUnknownAccess: 1,
+			expectedWithoutAccess:     0,
+			expectedChangesRequested:  0,
+		},
+		{
+			name: "approval with confirmed no write access",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "blocked-user",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessNo,
+				},
+			},
+			expectedWithAccess:        0,
+			expectedWithUnknownAccess: 0,
+			expectedWithoutAccess:     1,
+			expectedChangesRequested:  0,
+		},
+		{
+			name: "mixed approvals with different write access levels",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "owner",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessDefinitely,
+				},
+				{
+					Kind:        "review",
+					Actor:       "contributor",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessUnlikely,
+				},
+				{
+					Kind:        "review",
+					Actor:       "member",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessLikely,
+				},
+				{
+					Kind:        "review",
+					Actor:       "blocked",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessNo,
+				},
+			},
+			expectedWithAccess:        1,
+			expectedWithUnknownAccess: 2,
+			expectedWithoutAccess:     1,
+			expectedChangesRequested:  0,
+		},
+		{
+			name: "latest review overrides previous (approval then changes_requested)",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "reviewer",
+					Outcome:     "approved",
+					WriteAccess: WriteAccessDefinitely,
+				},
+				{
+					Kind:        "review",
+					Actor:       "reviewer",
+					Outcome:     "changes_requested",
+					WriteAccess: WriteAccessDefinitely,
+				},
+			},
+			expectedWithAccess:        0,
+			expectedWithUnknownAccess: 0,
+			expectedWithoutAccess:     0,
+			expectedChangesRequested:  1,
+		},
+		{
+			name: "commented reviews ignored",
+			events: []Event{
+				{
+					Kind:        "review",
+					Actor:       "commenter",
+					Outcome:     "commented",
+					WriteAccess: WriteAccessDefinitely,
+				},
+			},
+			expectedWithAccess:        0,
+			expectedWithUnknownAccess: 0,
+			expectedWithoutAccess:     0,
+			expectedChangesRequested:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summary := calculateApprovalSummary(tt.events)
+
+			if summary.ApprovalsWithWriteAccess != tt.expectedWithAccess {
+				t.Errorf("ApprovalsWithWriteAccess: got %d, want %d",
+					summary.ApprovalsWithWriteAccess, tt.expectedWithAccess)
+			}
+			if summary.ApprovalsWithUnknownAccess != tt.expectedWithUnknownAccess {
+				t.Errorf("ApprovalsWithUnknownAccess: got %d, want %d",
+					summary.ApprovalsWithUnknownAccess, tt.expectedWithUnknownAccess)
+			}
+			if summary.ApprovalsWithoutWriteAccess != tt.expectedWithoutAccess {
+				t.Errorf("ApprovalsWithoutWriteAccess: got %d, want %d",
+					summary.ApprovalsWithoutWriteAccess, tt.expectedWithoutAccess)
+			}
+			if summary.ChangesRequested != tt.expectedChangesRequested {
+				t.Errorf("ChangesRequested: got %d, want %d",
+					summary.ChangesRequested, tt.expectedChangesRequested)
+			}
+		})
+	}
+}
+
 func TestCheckSummaryCancelledNotInFailing(t *testing.T) {
 	// Regression test: cancelled checks should only appear in cancelled map, not in failing map
 	// This was a bug where cancelled checks appeared in both maps

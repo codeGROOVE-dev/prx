@@ -384,6 +384,198 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 							login
 						}
 					}
+					... on AutoMergeEnabledEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on AutoMergeDisabledEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on ReviewDismissedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+						dismissalMessage
+					}
+					... on HeadRefDeletedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on RenamedTitleEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+						previousTitle
+						currentTitle
+					}
+					... on BaseRefChangedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on BaseRefForcePushedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on HeadRefForcePushedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on HeadRefRestoredEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on LockedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on UnlockedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on AddedToMergeQueueEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on RemovedFromMergeQueueEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on AutomaticBaseChangeSucceededEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on AutomaticBaseChangeFailedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on ConnectedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on DisconnectedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on CrossReferencedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on ReferencedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on SubscribedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on UnsubscribedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on DeployedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on DeploymentEnvironmentChangedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on PinnedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on UnpinnedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on TransferredEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
+					... on UserBlockedEvent {
+						id
+						createdAt
+						actor {
+							login
+						}
+					}
 				}
 			}
 		}
@@ -489,7 +681,52 @@ func (c *Client) executePaginatedGraphQL(
 	}
 
 	if len(result.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL errors: %v", result.Errors)
+		// Extract error messages for clearer output
+		var errMsgs []string
+		var hasPermissionError bool
+		for _, e := range result.Errors {
+			errMsgs = append(errMsgs, e.Message)
+			// Check for common permission-related error messages
+			msg := strings.ToLower(e.Message)
+			if strings.Contains(msg, "not accessible by integration") ||
+				strings.Contains(msg, "resource not accessible") ||
+				strings.Contains(msg, "forbidden") ||
+				strings.Contains(msg, "insufficient permissions") ||
+				strings.Contains(msg, "requires authentication") {
+				hasPermissionError = true
+			}
+		}
+
+		// Check if we got the core PR data despite errors - GraphQL can return partial data
+		errStr := strings.Join(errMsgs, "; ")
+		if result.Data.Repository.PullRequest.Number == 0 {
+			// No PR data returned, this is a fatal error
+			if hasPermissionError {
+				return nil, fmt.Errorf(
+					"fetching PR %s/%s#%d via GraphQL failed due to insufficient permissions: %s "+
+						"(note: some fields like branchProtectionRule or refUpdateRule may require push access "+
+						"even on public repositories; check token scopes or try using a token with 'repo' or 'public_repo' scope)",
+					owner, repo, prNumber, errStr)
+			}
+			return nil, fmt.Errorf("fetching PR %s/%s#%d via GraphQL: %s", owner, repo, prNumber, errStr)
+		}
+
+		// We got PR data, just log the errors as warnings and continue
+		if hasPermissionError {
+			c.logger.WarnContext(ctx, "GraphQL query returned permission errors but PR data was retrieved - some fields may be missing",
+				"owner", owner,
+				"repo", repo,
+				"pr", prNumber,
+				"errors", errStr,
+				"note", "fields like branchProtectionRule or refUpdateRule require push access")
+		} else {
+			c.logger.WarnContext(ctx, "GraphQL query returned errors but PR data was retrieved - some fields may be missing",
+				"owner", owner,
+				"repo", repo,
+				"pr", prNumber,
+				"errors", errStr)
+		}
+		// Continue processing with partial data
 	}
 
 	c.logger.InfoContext(ctx, "GraphQL query completed",
@@ -946,6 +1183,8 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 }
 
 // parseGraphQLTimelineEvent parses a single timeline event.
+//
+//nolint:gocognit,revive,maintidx // High complexity justified - must handle all GitHub timeline event types
 func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[string]any, _ /* owner */, _ /* repo */ string) *Event {
 	typename, ok := item["__typename"].(string)
 	if !ok {
@@ -1065,6 +1304,95 @@ func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[s
 
 	case "MergedEvent":
 		event.Kind = "merged"
+
+	case "AutoMergeEnabledEvent":
+		event.Kind = "auto_merge_enabled"
+
+	case "AutoMergeDisabledEvent":
+		event.Kind = "auto_merge_disabled"
+
+	case "ReviewDismissedEvent":
+		event.Kind = "review_dismissed"
+		if msg, ok := item["dismissalMessage"].(string); ok {
+			event.Body = msg
+		}
+
+	case "BaseRefChangedEvent":
+		event.Kind = "base_ref_changed"
+
+	case "BaseRefForcePushedEvent":
+		event.Kind = "base_ref_force_pushed"
+
+	case "HeadRefForcePushedEvent":
+		event.Kind = "head_ref_force_pushed"
+
+	case "HeadRefDeletedEvent":
+		event.Kind = "head_ref_deleted"
+
+	case "HeadRefRestoredEvent":
+		event.Kind = "head_ref_restored"
+
+	case "RenamedTitleEvent":
+		event.Kind = "renamed_title"
+		if prev, ok := item["previousTitle"].(string); ok {
+			if curr, ok := item["currentTitle"].(string); ok {
+				event.Body = fmt.Sprintf("Renamed from %q to %q", prev, curr)
+			}
+		}
+
+	case "LockedEvent":
+		event.Kind = "locked"
+
+	case "UnlockedEvent":
+		event.Kind = "unlocked"
+
+	case "AddedToMergeQueueEvent":
+		event.Kind = "added_to_merge_queue"
+
+	case "RemovedFromMergeQueueEvent":
+		event.Kind = "removed_from_merge_queue"
+
+	case "AutomaticBaseChangeSucceededEvent":
+		event.Kind = "automatic_base_change_succeeded"
+
+	case "AutomaticBaseChangeFailedEvent":
+		event.Kind = "automatic_base_change_failed"
+
+	case "ConnectedEvent":
+		event.Kind = "connected"
+
+	case "DisconnectedEvent":
+		event.Kind = "disconnected"
+
+	case "CrossReferencedEvent":
+		event.Kind = "cross_referenced"
+
+	case "ReferencedEvent":
+		event.Kind = "referenced"
+
+	case "SubscribedEvent":
+		event.Kind = "subscribed"
+
+	case "UnsubscribedEvent":
+		event.Kind = "unsubscribed"
+
+	case "DeployedEvent":
+		event.Kind = "deployed"
+
+	case "DeploymentEnvironmentChangedEvent":
+		event.Kind = "deployment_environment_changed"
+
+	case "PinnedEvent":
+		event.Kind = "pinned"
+
+	case "UnpinnedEvent":
+		event.Kind = "unpinned"
+
+	case "TransferredEvent":
+		event.Kind = "transferred"
+
+	case "UserBlockedEvent":
+		event.Kind = "user_blocked"
 
 	default:
 		// Unknown event type

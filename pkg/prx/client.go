@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 )
 
@@ -26,12 +25,12 @@ type Client struct {
 	github interface {
 		get(ctx context.Context, path string, v any) (*githubResponse, error)
 		raw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error)
-		userPermission(ctx context.Context, owner, repo, username string) (string, error)
+		collaborators(ctx context.Context, owner, repo string) (map[string]string, error)
 	}
-	logger          *slog.Logger
-	token           string // Store token for recreating client with new transport
-	permissionCache *permissionCache
-	cacheDir        string // empty if caching is disabled
+	logger             *slog.Logger
+	token              string // Store token for recreating client with new transport
+	collaboratorsCache *collaboratorsCache
+	cacheDir           string // empty if caching is disabled
 }
 
 // Option is a function that configures a Client.
@@ -94,9 +93,9 @@ func NewClient(token string, opts ...Option) *Client {
 			api:   githubAPI,
 		},
 	}
-	// Initialize in-memory permission cache (no disk persistence for regular client)
-	c.permissionCache = &permissionCache{
-		memory: make(map[string]permissionEntry),
+	// Initialize in-memory cache (no disk persistence for regular client)
+	c.collaboratorsCache = &collaboratorsCache{
+		memory: make(map[string]collaboratorsEntry),
 		// diskPath is empty, so it won't persist to disk
 	}
 
@@ -119,115 +118,8 @@ func (c *Client) PullRequestWithReferenceTime(
 	referenceTime time.Time,
 ) (*PullRequestData, error) {
 	if c.cacheDir != "" {
-		return c.pullRequestWithCache(ctx, owner, repo, prNumber, referenceTime)
-	}
-	return c.pullRequestNonCached(ctx, owner, repo, prNumber)
-}
-
-func (c *Client) pullRequestWithCache(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (*PullRequestData, error) {
-	return c.pullRequestImpl(ctx, owner, repo, prNumber, &referenceTime)
-}
-
-func (c *Client) pullRequestNonCached(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
-	return c.pullRequestImpl(ctx, owner, repo, prNumber, nil)
-}
-
-// pullRequestImpl is the unified implementation that handles both cached and non-cached requests.
-func (c *Client) pullRequestImpl(ctx context.Context, owner, repo string, prNumber int, referenceTime *time.Time) (*PullRequestData, error) {
-	// Check if caching is enabled
-	if c.cacheDir != "" && referenceTime != nil {
 		cacheClient := &CacheClient{Client: c, cacheDir: c.cacheDir}
-		return cacheClient.cachedPullRequestViaGraphQL(ctx, owner, repo, prNumber, *referenceTime)
+		return cacheClient.cachedPullRequestViaGraphQL(ctx, owner, repo, prNumber, referenceTime)
 	}
-	// Direct GraphQL call without caching
 	return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
-}
-
-// processEvents filters, sorts, and upgrades write access for events.
-func processEvents(events []Event) []Event {
-	events = filterEvents(events)
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
-	upgradeWriteAccess(events)
-	return events
-}
-
-// finalizePullRequest applies final calculations and consistency fixes.
-func finalizePullRequest(pullRequest *PullRequest, events []Event, requiredChecks []string, testStateFromAPI string) {
-	pullRequest.TestState = testStateFromAPI
-	pullRequest.CheckSummary = calculateCheckSummary(events, requiredChecks)
-	pullRequest.ApprovalSummary = calculateApprovalSummary(events)
-
-	fixTestState(pullRequest)
-	fixMergeable(pullRequest)
-	setMergeableDescription(pullRequest)
-}
-
-// fixTestState ensures test_state is consistent with check_summary.
-func fixTestState(pullRequest *PullRequest) {
-	switch {
-	case len(pullRequest.CheckSummary.Failing) > 0 || len(pullRequest.CheckSummary.Cancelled) > 0:
-		pullRequest.TestState = TestStateFailing
-	case len(pullRequest.CheckSummary.Pending) > 0:
-		pullRequest.TestState = TestStatePending
-	case len(pullRequest.CheckSummary.Success) > 0:
-		pullRequest.TestState = TestStatePassing
-	default:
-		pullRequest.TestState = TestStateNone
-	}
-}
-
-// fixMergeable ensures mergeable is consistent with mergeable_state.
-func fixMergeable(pullRequest *PullRequest) {
-	if pullRequest.MergeableState == "blocked" || pullRequest.MergeableState == "dirty" || pullRequest.MergeableState == "unstable" {
-		falseVal := false
-		pullRequest.Mergeable = &falseVal
-	}
-}
-
-// setMergeableDescription adds human-readable description for mergeable state.
-func setMergeableDescription(pullRequest *PullRequest) {
-	switch pullRequest.MergeableState {
-	case "blocked":
-		setBlockedDescription(pullRequest)
-	case "dirty":
-		pullRequest.MergeableStateDescription = "PR has merge conflicts that need to be resolved"
-	case "unstable":
-		pullRequest.MergeableStateDescription = "PR is mergeable but status checks are failing"
-	case "clean":
-		pullRequest.MergeableStateDescription = "PR is ready to merge"
-	case "unknown":
-		pullRequest.MergeableStateDescription = "Merge status is being calculated"
-	case "draft":
-		pullRequest.MergeableStateDescription = "PR is in draft state"
-	default:
-		pullRequest.MergeableStateDescription = ""
-	}
-}
-
-// setBlockedDescription determines what's blocking the PR and sets appropriate description.
-func setBlockedDescription(pullRequest *PullRequest) {
-	hasApprovals := pullRequest.ApprovalSummary.ApprovalsWithWriteAccess > 0
-	hasFailingChecks := len(pullRequest.CheckSummary.Failing) > 0 || len(pullRequest.CheckSummary.Cancelled) > 0
-	hasPendingChecks := len(pullRequest.CheckSummary.Pending) > 0
-
-	switch {
-	case !hasApprovals && !hasFailingChecks:
-		if hasPendingChecks {
-			pullRequest.MergeableStateDescription = "PR requires approval and has pending status checks"
-		} else {
-			pullRequest.MergeableStateDescription = "PR requires approval"
-		}
-	case hasFailingChecks:
-		if !hasApprovals {
-			pullRequest.MergeableStateDescription = "PR has failing status checks and requires approval"
-		} else {
-			pullRequest.MergeableStateDescription = "PR is blocked by failing status checks"
-		}
-	case hasPendingChecks:
-		pullRequest.MergeableStateDescription = "PR is blocked by pending status checks"
-	default:
-		pullRequest.MergeableStateDescription = "PR is blocked by required status checks, reviews, or branch protection rules"
-	}
 }
