@@ -1471,7 +1471,7 @@ func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[s
 }
 
 // writeAccessFromAssociation calculates write access from association.
-func (*Client) writeAccessFromAssociation(_ /* ctx */ context.Context, _ /* owner */, _ /* repo */, user, association string) int {
+func (c *Client) writeAccessFromAssociation(ctx context.Context, owner, repo, user, association string) int {
 	if user == "" {
 		return WriteAccessNA
 	}
@@ -1480,14 +1480,68 @@ func (*Client) writeAccessFromAssociation(_ /* ctx */ context.Context, _ /* owne
 	case "OWNER", "COLLABORATOR":
 		return WriteAccessDefinitely
 	case "MEMBER":
-		// For MEMBER, we'd need an additional API call to check permissions
-		// This is the one case where GraphQL doesn't give us everything
-		// For now, return likely
-		return WriteAccessLikely
+		// For MEMBER, check collaborators cache to determine actual permission level
+		// Members can have various permissions (admin, write, read) so we need to check
+		return c.checkCollaboratorPermission(ctx, owner, repo, user)
 	case "CONTRIBUTOR", "NONE", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER":
 		return WriteAccessUnlikely
 	default:
 		return WriteAccessNA
+	}
+}
+
+// checkCollaboratorPermission checks if a user has write access by looking them up in the collaborators list.
+// Uses cache to avoid repeated API calls (4 hour TTL).
+func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, user string) int {
+	// Check cache first
+	if collabs, ok := c.collaboratorsCache.get(owner, repo); ok {
+		switch collabs[user] {
+		case "admin", "maintain", "write":
+			return WriteAccessDefinitely
+		case "read", "triage", "none":
+			return WriteAccessNo
+		default:
+			// User not in collaborators list
+			return WriteAccessUnlikely
+		}
+	}
+
+	// Cache miss - fetch collaborators from API
+	gc, ok := c.github.(*githubClient)
+	if !ok {
+		// Not a real GitHub client (probably test mock) - return likely as fallback
+		return WriteAccessLikely
+	}
+
+	collabs, err := gc.collaborators(ctx, owner, repo)
+	if err != nil {
+		// API call failed (could be 403 if no permission to list collaborators)
+		// Return likely as fallback
+		c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",
+			"owner", owner,
+			"repo", repo,
+			"user", user,
+			"error", err)
+		return WriteAccessLikely
+	}
+
+	// Store in cache
+	if err := c.collaboratorsCache.set(owner, repo, collabs); err != nil {
+		// Cache write failed, just log it and continue
+		c.logger.WarnContext(ctx, "failed to cache collaborators",
+			"owner", owner,
+			"repo", repo,
+			"error", err)
+	}
+
+	switch collabs[user] {
+	case "admin", "maintain", "write":
+		return WriteAccessDefinitely
+	case "read", "triage", "none":
+		return WriteAccessNo
+	default:
+		// User not in collaborators list
+		return WriteAccessUnlikely
 	}
 }
 
