@@ -76,6 +76,21 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 				}
 			}
 
+			reviewRequests(first: 100) {
+				nodes {
+					requestedReviewer {
+						... on User {
+							login
+							id
+						}
+						... on Team {
+							name
+							id
+						}
+					}
+				}
+			}
+
 			baseRef {
 				name
 				target {
@@ -798,6 +813,15 @@ type graphQLPullRequestComplete struct {
 		} `json:"nodes"`
 	} `json:"labels"`
 
+	ReviewRequests struct {
+		Nodes []struct {
+			RequestedReviewer struct {
+				Login string `json:"login,omitempty"`
+				Name  string `json:"name,omitempty"`
+			} `json:"requestedReviewer"`
+		} `json:"nodes"`
+	} `json:"reviewRequests"`
+
 	BaseRef struct {
 		RefUpdateRule *struct {
 			RequiredStatusCheckContexts []string `json:"requiredStatusCheckContexts"`
@@ -1005,8 +1029,15 @@ func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLP
 	}
 
 	// Requested reviewers
-	// RequestedReviewers field removed from GraphQL query
-	// It's not critical data and can be omitted
+	for _, request := range data.ReviewRequests.Nodes {
+		reviewer := request.RequestedReviewer
+		// Teams have "name", users have "login"
+		if reviewer.Login != "" {
+			pr.RequestedReviewers = append(pr.RequestedReviewers, reviewer.Login)
+		} else if reviewer.Name != "" {
+			pr.RequestedReviewers = append(pr.RequestedReviewers, reviewer.Name)
+		}
+	}
 
 	return pr
 }
