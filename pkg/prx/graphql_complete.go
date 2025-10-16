@@ -681,7 +681,52 @@ func (c *Client) executePaginatedGraphQL(
 	}
 
 	if len(result.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL errors: %v", result.Errors)
+		// Extract error messages for clearer output
+		var errMsgs []string
+		var hasPermissionError bool
+		for _, e := range result.Errors {
+			errMsgs = append(errMsgs, e.Message)
+			// Check for common permission-related error messages
+			msg := strings.ToLower(e.Message)
+			if strings.Contains(msg, "not accessible by integration") ||
+				strings.Contains(msg, "resource not accessible") ||
+				strings.Contains(msg, "forbidden") ||
+				strings.Contains(msg, "insufficient permissions") ||
+				strings.Contains(msg, "requires authentication") {
+				hasPermissionError = true
+			}
+		}
+
+		// Check if we got the core PR data despite errors - GraphQL can return partial data
+		errStr := strings.Join(errMsgs, "; ")
+		if result.Data.Repository.PullRequest.Number == 0 {
+			// No PR data returned, this is a fatal error
+			if hasPermissionError {
+				return nil, fmt.Errorf(
+					"fetching PR %s/%s#%d via GraphQL failed due to insufficient permissions: %s "+
+						"(note: some fields like branchProtectionRule or refUpdateRule may require push access "+
+						"even on public repositories; check token scopes or try using a token with 'repo' or 'public_repo' scope)",
+					owner, repo, prNumber, errStr)
+			}
+			return nil, fmt.Errorf("fetching PR %s/%s#%d via GraphQL: %s", owner, repo, prNumber, errStr)
+		}
+
+		// We got PR data, just log the errors as warnings and continue
+		if hasPermissionError {
+			c.logger.WarnContext(ctx, "GraphQL query returned permission errors but PR data was retrieved - some fields may be missing",
+				"owner", owner,
+				"repo", repo,
+				"pr", prNumber,
+				"errors", errStr,
+				"note", "fields like branchProtectionRule or refUpdateRule require push access")
+		} else {
+			c.logger.WarnContext(ctx, "GraphQL query returned errors but PR data was retrieved - some fields may be missing",
+				"owner", owner,
+				"repo", repo,
+				"pr", prNumber,
+				"errors", errStr)
+		}
+		// Continue processing with partial data
 	}
 
 	c.logger.InfoContext(ctx, "GraphQL query completed",
