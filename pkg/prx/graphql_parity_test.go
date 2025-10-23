@@ -159,7 +159,7 @@ func TestGraphQLBotDetection(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "bot suffix",
+			name:     "bot suffix with brackets",
 			actor:    graphQLActor{Login: "dependabot[bot]"},
 			expected: true,
 		},
@@ -169,13 +169,48 @@ func TestGraphQLBotDetection(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "minikube-bot",
+			actor:    graphQLActor{Login: "minikube-bot"},
+			expected: true,
+		},
+		{
 			name:     "robot suffix",
 			actor:    graphQLActor{Login: "k8s-ci-robot"},
 			expected: true,
 		},
 		{
+			name:     "bot underscore suffix",
+			actor:    graphQLActor{Login: "some_bot"},
+			expected: true,
+		},
+		{
+			name:     "bot prefix",
+			actor:    graphQLActor{Login: "bot-service"},
+			expected: true,
+		},
+		{
+			name:     "bot name without separator",
+			actor:    graphQLActor{Login: "dependabot"},
+			expected: true,
+		},
+		{
+			name:     "uppercase BOT suffix",
+			actor:    graphQLActor{Login: "CI-BOT"},
+			expected: true,
+		},
+		{
 			name:     "regular user",
 			actor:    graphQLActor{Login: "octocat"},
+			expected: false,
+		},
+		{
+			name:     "user with bot in middle",
+			actor:    graphQLActor{Login: "robotnik"},
+			expected: false,
+		},
+		{
+			name:     "short name ending in bot",
+			actor:    graphQLActor{Login: "bot"},
 			expected: false,
 		},
 		{
@@ -187,9 +222,9 @@ func TestGraphQLBotDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isBotFromGraphQL(tt.actor)
+			result := isBot(tt.actor)
 			if result != tt.expected {
-				t.Errorf("isBotFromGraphQL(%v) = %v, want %v",
+				t.Errorf("isBot(%v) = %v, want %v",
 					tt.actor, result, tt.expected)
 			}
 		})

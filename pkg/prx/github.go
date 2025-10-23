@@ -125,12 +125,22 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 			}
 		}
 
-		slog.ErrorContext(ctx, "GitHub API error",
-			"status", resp.Status,
-			"status_code", resp.StatusCode,
-			"url", apiURL,
-			"body", string(body),
-			"headers", errorHeaders)
+		// Log collaborator 403 errors as warnings since they're expected for repos without push access
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(apiURL, "/collaborators") {
+			slog.WarnContext(ctx, "GitHub API access denied",
+				"status", resp.Status,
+				"status_code", resp.StatusCode,
+				"url", apiURL,
+				"body", string(body),
+				"headers", errorHeaders)
+		} else {
+			slog.ErrorContext(ctx, "GitHub API error",
+				"status", resp.Status,
+				"status_code", resp.StatusCode,
+				"url", apiURL,
+				"body", string(body),
+				"headers", errorHeaders)
+		}
 		return nil, nil, &GitHubAPIError{
 			StatusCode: resp.StatusCode,
 			Status:     resp.Status,

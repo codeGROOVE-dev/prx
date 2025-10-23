@@ -919,18 +919,30 @@ type graphQLActor struct {
 	ID    string `json:"id,omitempty"`
 }
 
-// isBotFromGraphQL determines if an actor is a bot.
-func isBotFromGraphQL(actor graphQLActor) bool {
+// isBot determines if an actor is a bot.
+func isBot(actor graphQLActor) bool {
 	if actor.Login == "" {
 		return false
 	}
-	// Check for bot patterns in login
+	// Check for bot patterns in login (case-insensitive for better detection)
 	login := actor.Login
+	lowerLogin := strings.ToLower(login)
+
+	// Check for common bot suffixes
 	if strings.HasSuffix(login, "[bot]") ||
-		strings.HasSuffix(login, "-bot") ||
-		strings.HasSuffix(login, "-robot") {
+		strings.HasSuffix(lowerLogin, "-bot") ||
+		strings.HasSuffix(lowerLogin, "_bot") ||
+		strings.HasSuffix(lowerLogin, "-robot") ||
+		strings.HasPrefix(lowerLogin, "bot-") {
 		return true
 	}
+
+	// Check for GitHub bot account patterns
+	// Many bots end with "bot" without separator (e.g., "dependabot", "renovatebot")
+	if strings.HasSuffix(lowerLogin, "bot") && len(login) > 3 {
+		return true
+	}
+
 	// In GraphQL, bots have different IDs than users
 	// Bot IDs typically start with "BOT_" or have specific patterns
 	// This is a heuristic that may need adjustment
@@ -1013,9 +1025,10 @@ func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLP
 		pr.MergeableState = strings.ToLower(data.MergeStateStatus)
 	}
 
-	// Author write access
+	// Author write access and bot detection
 	if data.Author.Login != "" {
 		pr.AuthorWriteAccess = c.writeAccessFromAssociation(ctx, owner, repo, data.Author.Login, data.AuthorAssociation)
+		pr.AuthorBot = isBot(data.Author)
 	}
 
 	// Assignees (initialize to empty slice if none)
@@ -1089,7 +1102,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 		Timestamp:   data.CreatedAt,
 		Actor:       data.Author.Login,
 		Body:        truncate(data.Body),
-		Bot:         isBotFromGraphQL(data.Author),
+		Bot:         isBot(data.Author),
 		WriteAccess: c.writeAccessFromAssociation(ctx, owner, repo, data.Author.Login, data.AuthorAssociation),
 	})
 
@@ -1102,7 +1115,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 		}
 		if node.Commit.Author.User != nil {
 			event.Actor = node.Commit.Author.User.Login
-			event.Bot = isBotFromGraphQL(*node.Commit.Author.User)
+			event.Bot = isBot(*node.Commit.Author.User)
 		} else {
 			event.Actor = node.Commit.Author.Name
 		}
@@ -1126,7 +1139,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 			Body:        truncate(review.Body),
 			Outcome:     strings.ToLower(review.State),
 			Question:    containsQuestion(review.Body),
-			Bot:         isBotFromGraphQL(review.Author),
+			Bot:         isBot(review.Author),
 			WriteAccess: c.writeAccessFromAssociation(ctx, owner, repo, review.Author.Login, review.AuthorAssociation),
 		}
 		events = append(events, event)
@@ -1141,7 +1154,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 				Actor:       comment.Author.Login,
 				Body:        truncate(comment.Body),
 				Question:    containsQuestion(comment.Body),
-				Bot:         isBotFromGraphQL(comment.Author),
+				Bot:         isBot(comment.Author),
 				WriteAccess: c.writeAccessFromAssociation(ctx, owner, repo, comment.Author.Login, comment.AuthorAssociation),
 			}
 			events = append(events, event)
@@ -1156,7 +1169,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 			Actor:       comment.Author.Login,
 			Body:        truncate(comment.Body),
 			Question:    containsQuestion(comment.Body),
-			Bot:         isBotFromGraphQL(comment.Author),
+			Bot:         isBot(comment.Author),
 			WriteAccess: c.writeAccessFromAssociation(ctx, owner, repo, comment.Author.Login, comment.AuthorAssociation),
 		}
 		events = append(events, event)
@@ -1217,7 +1230,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 				}
 				if node.Creator != nil {
 					event.Actor = node.Creator.Login
-					event.Bot = isBotFromGraphQL(*node.Creator)
+					event.Bot = isBot(*node.Creator)
 				}
 				events = append(events, event)
 			default:
@@ -1243,6 +1256,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 		if data.MergedBy != nil {
 			event.Actor = data.MergedBy.Login
 			event.Kind = "pr_merged"
+			event.Bot = isBot(*data.MergedBy)
 		}
 		events = append(events, event)
 	}
@@ -1279,6 +1293,21 @@ func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[s
 		return "unknown"
 	}
 
+	// Helper to check if actor is a bot
+	isActorBot := func() bool {
+		if actor, ok := item["actor"].(map[string]any); ok {
+			var actorObj graphQLActor
+			if login, ok := actor["login"].(string); ok {
+				actorObj.Login = login
+			}
+			if id, ok := actor["id"].(string); ok {
+				actorObj.ID = id
+			}
+			return isBot(actorObj)
+		}
+		return false
+	}
+
 	createdAt := getTime("createdAt")
 	if createdAt == nil {
 		return nil
@@ -1287,6 +1316,7 @@ func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[s
 	event := &Event{
 		Timestamp: *createdAt,
 		Actor:     getActor(),
+		Bot:       isActorBot(),
 	}
 
 	switch typename {
