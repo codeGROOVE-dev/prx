@@ -256,8 +256,12 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 							... on User {
+								id
+							}
+							... on Bot {
 								id
 							}
 						}
@@ -276,6 +280,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 						assignee {
@@ -292,6 +297,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 							name
 						}
 						actor {
+							__typename
 							login
 						}
 					}
@@ -302,6 +308,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 							name
 						}
 						actor {
+							__typename
 							login
 						}
 					}
@@ -310,6 +317,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						createdAt
 						milestoneTitle
 						actor {
+							__typename
 							login
 						}
 					}
@@ -318,6 +326,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						createdAt
 						milestoneTitle
 						actor {
+							__typename
 							login
 						}
 					}
@@ -325,6 +334,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 						requestedReviewer {
@@ -346,6 +356,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 						requestedReviewer {
@@ -361,6 +372,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -368,6 +380,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -375,6 +388,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -382,6 +396,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -389,6 +404,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -396,6 +412,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -403,6 +420,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -410,6 +428,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -417,6 +436,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 						dismissalMessage
@@ -425,6 +445,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -432,6 +453,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 						previousTitle
@@ -441,6 +463,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -448,6 +471,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -455,6 +479,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -462,6 +487,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -469,6 +495,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -476,6 +503,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -483,6 +511,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -490,6 +519,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -497,6 +527,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -504,6 +535,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -511,6 +543,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -518,6 +551,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -525,6 +559,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -532,6 +567,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -539,6 +575,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -546,6 +583,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -553,6 +591,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -560,6 +599,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -567,6 +607,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -574,6 +615,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -581,6 +623,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -588,6 +631,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 						id
 						createdAt
 						actor {
+							__typename
 							login
 						}
 					}
@@ -917,6 +961,7 @@ type graphQLPullRequestComplete struct {
 type graphQLActor struct {
 	Login string `json:"login"`
 	ID    string `json:"id,omitempty"`
+	Type  string `json:"type,omitempty"`
 }
 
 // isBot determines if an actor is a bot.
@@ -924,6 +969,12 @@ func isBot(actor graphQLActor) bool {
 	if actor.Login == "" {
 		return false
 	}
+
+	// Check the Type field first - most reliable signal from GitHub API
+	if actor.Type == "Bot" {
+		return true
+	}
+
 	// Check for bot patterns in login (case-insensitive for better detection)
 	login := actor.Login
 	lowerLogin := strings.ToLower(login)
@@ -1302,6 +1353,9 @@ func (*Client) parseGraphQLTimelineEvent(_ /* ctx */ context.Context, item map[s
 			}
 			if id, ok := actor["id"].(string); ok {
 				actorObj.ID = id
+			}
+			if typ, ok := actor["__typename"].(string); ok {
+				actorObj.Type = typ
 			}
 			return isBot(actorObj)
 		}

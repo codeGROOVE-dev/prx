@@ -159,6 +159,21 @@ func TestGraphQLBotDetection(t *testing.T) {
 		expected bool
 	}{
 		{
+			name:     "bot type field",
+			actor:    graphQLActor{Login: "ready-to-review-beta", Type: "Bot"},
+			expected: true,
+		},
+		{
+			name:     "bot type with any login",
+			actor:    graphQLActor{Login: "some-app", Type: "Bot"},
+			expected: true,
+		},
+		{
+			name:     "user type field",
+			actor:    graphQLActor{Login: "octocat", Type: "User"},
+			expected: false,
+		},
+		{
 			name:     "bot suffix with brackets",
 			actor:    graphQLActor{Login: "dependabot[bot]"},
 			expected: true,
