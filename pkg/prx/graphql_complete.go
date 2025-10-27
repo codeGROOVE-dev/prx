@@ -36,6 +36,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 			authorAssociation
 
 			author {
+				__typename
 				login
 				... on User {
 					id
@@ -46,8 +47,12 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 			}
 
 			mergedBy {
+				__typename
 				login
 				... on User {
+					id
+				}
+				... on Bot {
 					id
 				}
 			}
@@ -138,7 +143,11 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 										targetUrl
 										createdAt
 										creator {
+											__typename
 											login
+											... on User {
+												id
+											}
 											... on Bot {
 												id
 											}
@@ -188,6 +197,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 					submittedAt
 					authorAssociation
 					author {
+						__typename
 						login
 						... on User {
 							id
@@ -210,6 +220,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 							createdAt
 							authorAssociation
 							author {
+								__typename
 								login
 								... on User {
 									id
@@ -234,6 +245,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 					createdAt
 					authorAssociation
 					author {
+						__typename
 						login
 						... on User {
 							id
@@ -1600,12 +1612,25 @@ func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, u
 	collabs, err := gc.collaborators(ctx, owner, repo)
 	if err != nil {
 		// API call failed (could be 403 if no permission to list collaborators)
-		// Return likely as fallback
 		c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",
 			"owner", owner,
 			"repo", repo,
 			"user", user,
 			"error", err)
+
+		// If it's a 403 (permission denied), cache an empty result to avoid retrying
+		// This prevents repeated API calls for repos where we don't have access
+		var apiErr *GitHubAPIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+			// Cache empty collaborators map to prevent future retries
+			if cacheErr := c.collaboratorsCache.set(owner, repo, make(map[string]string)); cacheErr != nil {
+				c.logger.WarnContext(ctx, "failed to cache empty collaborators for 403",
+					"owner", owner,
+					"repo", repo,
+					"error", cacheErr)
+			}
+		}
+
 		return WriteAccessLikely
 	}
 
