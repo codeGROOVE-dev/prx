@@ -32,7 +32,7 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 	}
 
 	// Get existing required checks from GraphQL
-	existingRequired := c.getExistingRequiredChecks(prData)
+	existingRequired := c.existingRequiredChecks(prData)
 
 	// Combine with additional required checks from rulesets
 	existingRequired = append(existingRequired, additionalRequired...)
@@ -170,8 +170,8 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 	return events, nil
 }
 
-// getExistingRequiredChecks extracts required checks that were already identified.
-func (*Client) getExistingRequiredChecks(prData *PullRequestData) []string {
+// existingRequiredChecks extracts required checks that were already identified.
+func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 	var required []string
 
 	// Extract from existing events that are marked as required

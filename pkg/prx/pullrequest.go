@@ -105,7 +105,13 @@ func finalizePullRequest(pullRequest *PullRequest, events []Event, requiredCheck
 	pullRequest.ParticipantAccess = calculateParticipantAccess(events, pullRequest)
 
 	fixTestState(pullRequest)
-	fixMergeable(pullRequest)
+
+	// Ensure mergeable is consistent with mergeable_state
+	if pullRequest.MergeableState == "blocked" || pullRequest.MergeableState == "dirty" || pullRequest.MergeableState == "unstable" {
+		falseVal := false
+		pullRequest.Mergeable = &falseVal
+	}
+
 	setMergeableDescription(pullRequest)
 }
 
@@ -120,14 +126,6 @@ func fixTestState(pullRequest *PullRequest) {
 		pullRequest.TestState = TestStatePassing
 	default:
 		pullRequest.TestState = TestStateNone
-	}
-}
-
-// fixMergeable ensures mergeable is consistent with mergeable_state.
-func fixMergeable(pullRequest *PullRequest) {
-	if pullRequest.MergeableState == "blocked" || pullRequest.MergeableState == "dirty" || pullRequest.MergeableState == "unstable" {
-		falseVal := false
-		pullRequest.Mergeable = &falseVal
 	}
 }
 

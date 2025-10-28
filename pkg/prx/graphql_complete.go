@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -681,8 +682,12 @@ func (c *Client) fetchPullRequestCompleteViaGraphQL(ctx context.Context, owner, 
 	// Calculate required checks
 	requiredChecks := c.extractRequiredChecksFromGraphQL(data)
 
-	// Process events (upgrade write access, etc.)
-	events = processEvents(events)
+	// Process events: filter, sort by timestamp, and upgrade write access
+	events = filterEvents(events)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.Before(events[j].Timestamp)
+	})
+	upgradeWriteAccess(events)
 
 	// Calculate test state
 	testState := c.calculateTestStateFromGraphQL(data)

@@ -1,3 +1,13 @@
+.PHONY: test
+test:
+	@echo "Running tests with race detection and coverage..."
+	@go test -race -coverprofile=coverage.out -covermode=atomic ./...
+	@echo ""
+	@echo "Coverage by package:"
+	@go tool cover -func=coverage.out | grep -E '^(github.com|total:)' | grep -v 'total:' || true
+	@echo ""
+	@echo "Checking coverage threshold (80%)..."
+	@./scripts/check-coverage.sh coverage.out 80
 
 # BEGIN: lint-install .
 # http://github.com/codeGROOVE-dev/lint-install

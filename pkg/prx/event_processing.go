@@ -1,17 +1,5 @@
 package prx
 
-import "sort"
-
-// processEvents filters, sorts, and upgrades write access for events.
-func processEvents(events []Event) []Event {
-	events = filterEvents(events)
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
-	upgradeWriteAccess(events)
-	return events
-}
-
 // filterEvents removes non-essential events to reduce noise.
 // Currently filters out successful status_check events (keeps failures).
 func filterEvents(events []Event) []Event {

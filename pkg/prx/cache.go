@@ -211,11 +211,11 @@ func (c *CacheClient) saveCache(ctx context.Context, key string, v any) error {
 }
 
 func (c *CacheClient) cleanOldCaches() {
-	c.logger.DebugContext(context.Background(), "cleaning old cache files")
+	c.logger.Debug("cleaning old cache files")
 
 	entries, err := os.ReadDir(c.cacheDir)
 	if err != nil {
-		c.logger.ErrorContext(context.Background(), "failed to read cache directory", "error", err)
+		c.logger.Error("failed to read cache directory", "error", err)
 		return
 	}
 
@@ -235,7 +235,7 @@ func (c *CacheClient) cleanOldCaches() {
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(c.cacheDir, entry.Name())
 			if err := os.Remove(path); err != nil {
-				c.logger.WarnContext(context.Background(), "failed to remove old cache file", "path", path, "error", err)
+				c.logger.Warn("failed to remove old cache file", "path", path, "error", err)
 			} else {
 				removed++
 			}
@@ -243,6 +243,6 @@ func (c *CacheClient) cleanOldCaches() {
 	}
 
 	if removed > 0 {
-		c.logger.InfoContext(context.Background(), "cleaned old cache files", "removed", removed)
+		c.logger.Info("cleaned old cache files", "removed", removed)
 	}
 }
