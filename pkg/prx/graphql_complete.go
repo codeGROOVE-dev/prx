@@ -1110,6 +1110,11 @@ func (c *Client) convertGraphQLToPullRequest(ctx context.Context, data *graphQLP
 		pr.Labels = append(pr.Labels, label.Name)
 	}
 
+	// Commits (chronologically ordered - oldest to newest)
+	for _, node := range data.Commits.Nodes {
+		pr.Commits = append(pr.Commits, node.Commit.OID)
+	}
+
 	// Build reviewers map from review requests and actual reviews
 	pr.Reviewers = buildReviewersMap(data)
 
@@ -1177,9 +1182,10 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 	// Commits
 	for _, node := range data.Commits.Nodes {
 		event := Event{
-			Kind:      "commit",
-			Timestamp: node.Commit.CommittedDate,
-			Body:      truncate(node.Commit.Message),
+			Kind:        "commit",
+			Timestamp:   node.Commit.CommittedDate,
+			Body:        node.Commit.OID,               // Commit SHA
+			Description: truncate(node.Commit.Message), // Commit message
 		}
 		if node.Commit.Author.User != nil {
 			event.Actor = node.Commit.Author.User.Login

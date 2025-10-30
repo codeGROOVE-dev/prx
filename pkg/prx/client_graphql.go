@@ -37,11 +37,10 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 	// Combine with additional required checks from rulesets
 	existingRequired = append(existingRequired, additionalRequired...)
 
-	// 2. Fetch check runs via REST (GraphQL's statusCheckRollup is often null)
-	checkRunEvents, err := c.fetchCheckRunsREST(ctx, owner, repo, prData.PullRequest.HeadSHA)
-	if err != nil {
-		c.logger.WarnContext(ctx, "failed to fetch check runs via REST", "error", err)
-	} else {
+	// 2. Fetch check runs via REST for all commits (GraphQL's statusCheckRollup is often null)
+	// This ensures we capture check run history including failures from earlier commits
+	checkRunEvents := c.fetchAllCheckRunsREST(ctx, owner, repo, prData)
+	{
 		// Mark check runs as required based on combined list
 		for i := range checkRunEvents {
 			for _, req := range existingRequired {
@@ -170,6 +169,62 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 	return events, nil
 }
 
+// fetchAllCheckRunsREST fetches check runs for all commits in the PR.
+// This ensures we capture the full history including failures from earlier commits
+// that may have been superseded by successful runs on later commits.
+// Errors fetching individual commits are logged but don't stop the overall process.
+func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, prData *PullRequestData) []Event {
+	// Collect all unique commit SHAs from the PR
+	commitSHAs := make([]string, 0)
+
+	// Add HEAD SHA (most important)
+	if prData.PullRequest.HeadSHA != "" {
+		commitSHAs = append(commitSHAs, prData.PullRequest.HeadSHA)
+	}
+
+	// Add all other commit SHAs from commit events
+	for i := range prData.Events {
+		e := &prData.Events[i]
+		if e.Kind == "commit" && e.Body != "" {
+			// Body contains the commit SHA for commit events
+			commitSHAs = append(commitSHAs, e.Body)
+		}
+	}
+
+	// Deduplicate SHAs (in case HEAD is also in commit events)
+	uniqueSHAs := make(map[string]bool)
+	for _, sha := range commitSHAs {
+		uniqueSHAs[sha] = true
+	}
+
+	// Fetch check runs for each unique commit
+	var allEvents []Event
+	seenCheckRuns := make(map[string]bool) // Track unique check runs by "name:timestamp"
+
+	for sha := range uniqueSHAs {
+		events, err := c.fetchCheckRunsREST(ctx, owner, repo, sha)
+		if err != nil {
+			c.logger.WarnContext(ctx, "failed to fetch check runs for commit", "sha", sha, "error", err)
+			continue
+		}
+
+		// Add only unique check runs (same check can run on multiple commits)
+		for i := range events {
+			event := &events[i]
+			// Create a unique key based on check name and timestamp
+			key := fmt.Sprintf("%s:%s", event.Body, event.Timestamp.Format(time.RFC3339Nano))
+			if !seenCheckRuns[key] {
+				seenCheckRuns[key] = true
+				// Add the commit SHA to the Target field
+				event.Target = sha
+				allEvents = append(allEvents, *event)
+			}
+		}
+	}
+
+	return allEvents
+}
+
 // existingRequiredChecks extracts required checks that were already identified.
 func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 	var required []string
@@ -203,104 +258,45 @@ func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 }
 
 // recalculateCheckSummaryWithCheckRuns updates the check summary with REST-fetched check runs.
-func (c *Client) recalculateCheckSummaryWithCheckRuns(_ /* ctx */ context.Context, prData *PullRequestData, checkRunEvents []Event) {
-	if prData.PullRequest.CheckSummary == nil {
-		prData.PullRequest.CheckSummary = &CheckSummary{
-			Success:   make(map[string]string),
-			Failing:   make(map[string]string),
-			Pending:   make(map[string]string),
-			Cancelled: make(map[string]string),
-			Skipped:   make(map[string]string),
-			Stale:     make(map[string]string),
-			Neutral:   make(map[string]string),
+// This recalculates the entire check summary from ALL events to ensure we have the latest state.
+func (c *Client) recalculateCheckSummaryWithCheckRuns(_ /* ctx */ context.Context, prData *PullRequestData, _ /* checkRunEvents */ []Event) {
+	// Get existing required checks before we overwrite the summary
+	var requiredChecks []string
+	if prData.PullRequest.CheckSummary != nil {
+		for check := range prData.PullRequest.CheckSummary.Pending {
+			requiredChecks = append(requiredChecks, check)
 		}
 	}
 
-	summary := prData.PullRequest.CheckSummary
+	// Recalculate the entire check summary from ALL events (including the new check runs)
+	// This ensures we get the latest state based on timestamps
+	prData.PullRequest.CheckSummary = calculateCheckSummary(prData.Events, requiredChecks)
 
-	// Process check runs we fetched via REST
-	for i := range checkRunEvents {
-		event := &checkRunEvents[i]
-		if event.Kind != "check_run" {
-			continue
-		}
-
-		desc := event.Description
-		if desc == "" {
-			desc = event.Outcome
-		}
-
-		switch event.Outcome {
-		case "success":
-			summary.Success[event.Body] = desc
-			// Remove from pending if it was there (GraphQL might have marked it as pending)
-			delete(summary.Pending, event.Body)
-		case "failure", "timed_out", "action_required":
-			summary.Failing[event.Body] = desc
-			// Remove from pending if it was there
-			delete(summary.Pending, event.Body)
-		case "cancelled":
-			summary.Cancelled[event.Body] = desc
-			delete(summary.Pending, event.Body)
-		case "skipped":
-			summary.Skipped[event.Body] = desc
-			delete(summary.Pending, event.Body)
-		case "stale":
-			summary.Stale[event.Body] = desc
-			delete(summary.Pending, event.Body)
-		case "neutral":
-			summary.Neutral[event.Body] = desc
-			delete(summary.Pending, event.Body)
-		case "queued", "in_progress", "pending", "waiting":
-			// Don't overwrite if already counted by GraphQL
-			if _, exists := summary.Pending[event.Body]; !exists {
-				summary.Pending[event.Body] = desc
-			}
-		default:
-			// Unknown outcome, ignore
-		}
-	}
-
-	// Update test state based on ALL events (not just check runs)
-	prData.PullRequest.TestState = c.calculateTestStateFromAllEvents(prData.Events)
+	// Update test state based on the recalculated check summary
+	prData.PullRequest.TestState = c.calculateTestStateFromCheckSummary(prData.PullRequest.CheckSummary)
 }
 
-// calculateTestStateFromAllEvents determines test state from ALL check events.
-func (*Client) calculateTestStateFromAllEvents(events []Event) string {
-	var hasFailure, hasRunning, hasQueued, hasSuccess bool
-
-	for i := range events {
-		event := &events[i]
-		if event.Kind != "check_run" && event.Kind != "status_check" {
-			continue
-		}
-
-		switch event.Outcome {
-		case "failure", "timed_out", "action_required":
-			hasFailure = true
-		case "in_progress":
-			hasRunning = true
-		case "queued", "pending", "waiting":
-			hasQueued = true
-		case "success":
-			hasSuccess = true
-		default:
-			// Other outcomes don't affect test state
-		}
+// calculateTestStateFromCheckSummary determines test state from a CheckSummary.
+// This looks at the LATEST state of checks (after deduplication) rather than all events.
+func (*Client) calculateTestStateFromCheckSummary(summary *CheckSummary) string {
+	if summary == nil {
+		return TestStateNone
 	}
 
-	// Any failure means tests are failing
-	if hasFailure {
+	// Any failing checks means tests are failing
+	if len(summary.Failing) > 0 {
 		return TestStateFailing
 	}
-	if hasRunning {
-		return TestStateRunning
+
+	// Any pending checks means tests are pending
+	if len(summary.Pending) > 0 {
+		return TestStatePending
 	}
-	if hasQueued {
-		return TestStateQueued
-	}
-	if hasSuccess {
+
+	// If we have successful checks and nothing failing/pending, tests are passing
+	if len(summary.Success) > 0 {
 		return TestStatePassing
 	}
+
 	return TestStateNone
 }

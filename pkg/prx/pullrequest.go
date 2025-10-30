@@ -41,6 +41,7 @@ type PullRequest struct {
 	// 24-byte slice/map fields
 	Assignees         []string               `json:"assignees"`
 	Labels            []string               `json:"labels,omitempty"`
+	Commits           []string               `json:"commits,omitempty"` // List of commit SHAs in chronological order (oldest to newest)
 	Reviewers         map[string]ReviewState `json:"reviewers,omitempty"`
 	ParticipantAccess map[string]int         `json:"participant_access,omitempty"` // Map of username to WriteAccess level
 	// 16-byte string fields

@@ -1,5 +1,9 @@
 package prx
 
+import (
+	"time"
+)
+
 // filterEvents removes non-essential events to reduce noise.
 // Currently filters out successful status_check events (keeps failures).
 func filterEvents(events []Event) []Event {
@@ -66,18 +70,32 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 
 	// Track latest state for each check (deduplicates multiple runs of same check)
 	type checkInfo struct {
+		timestamp   time.Time
 		outcome     string
 		description string
 	}
 	latestChecks := make(map[string]checkInfo)
 
 	// Collect latest state for each check
+	// Events should be sorted chronologically, but we explicitly track timestamps to be safe
 	for i := range events {
 		e := &events[i]
 		if (e.Kind == "status_check" || e.Kind == "check_run") && e.Body != "" {
-			latestChecks[e.Body] = checkInfo{
-				outcome:     e.Outcome,
-				description: e.Description,
+			existing, exists := latestChecks[e.Body]
+			// Update if:
+			// 1. First occurrence (!exists)
+			// 2. New event has a later timestamp
+			// 3. Both timestamps are zero (fallback to slice order - later in slice wins)
+			shouldUpdate := !exists ||
+				e.Timestamp.After(existing.timestamp) ||
+				(e.Timestamp.IsZero() && existing.timestamp.IsZero())
+
+			if shouldUpdate {
+				latestChecks[e.Body] = checkInfo{
+					outcome:     e.Outcome,
+					description: e.Description,
+					timestamp:   e.Timestamp,
+				}
 			}
 		}
 	}
