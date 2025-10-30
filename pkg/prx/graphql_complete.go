@@ -1255,41 +1255,45 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 			node := &data.HeadRef.Target.StatusCheckRollup.Contexts.Nodes[i]
 			switch node.TypeName {
 			case "CheckRun":
-				var timestamp time.Time
-				var outcome string
+				// Create separate events for started and completed states
+				// to provide visibility into test lifecycle
 
-				switch {
-				case node.CompletedAt != nil:
-					timestamp = *node.CompletedAt
-					outcome = strings.ToLower(node.Conclusion)
-				case node.StartedAt != nil:
-					timestamp = *node.StartedAt
-					outcome = strings.ToLower(node.Status)
-				default:
-					continue
-				}
-
-				event := Event{
-					Kind:      "check_run",
-					Timestamp: timestamp,
-					Body:      node.Name,
-					Outcome:   outcome,
-					Bot:       true, // Check runs are always from apps
-				}
-
-				// Build description
+				// Build description (shared across all events for this check run)
+				var description string
 				switch {
 				case node.Title != "" && node.Summary != "":
-					event.Description = fmt.Sprintf("%s: %s", node.Title, node.Summary)
+					description = fmt.Sprintf("%s: %s", node.Title, node.Summary)
 				case node.Title != "":
-					event.Description = node.Title
+					description = node.Title
 				case node.Summary != "":
-					event.Description = node.Summary
+					description = node.Summary
 				default:
 					// No description available
 				}
 
-				events = append(events, event)
+				// Create started event if timestamp exists
+				if node.StartedAt != nil {
+					events = append(events, Event{
+						Kind:        "check_run",
+						Timestamp:   *node.StartedAt,
+						Body:        node.Name,
+						Outcome:     strings.ToLower(node.Status),
+						Bot:         true,
+						Description: description,
+					})
+				}
+
+				// Create completed event if timestamp exists
+				if node.CompletedAt != nil {
+					events = append(events, Event{
+						Kind:        "check_run",
+						Timestamp:   *node.CompletedAt,
+						Body:        node.Name,
+						Outcome:     strings.ToLower(node.Conclusion),
+						Bot:         true,
+						Description: description,
+					})
+				}
 
 			case "StatusContext":
 				if node.CreatedAt == nil {
