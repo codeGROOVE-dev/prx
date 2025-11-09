@@ -1,7 +1,10 @@
 package prx
 
 import (
+	"context"
+	"log/slog"
 	"testing"
+	"time"
 )
 
 func TestIsBot(t *testing.T) {
@@ -131,5 +134,163 @@ func TestGraphQLPageInfo(t *testing.T) {
 	emptyPageInfo := graphQLPageInfo{}
 	if emptyPageInfo.HasNextPage {
 		t.Errorf("Expected empty HasNextPage to be false")
+	}
+}
+
+func TestConvertGraphQLReviewCommentsWithOutdated(t *testing.T) {
+	client := &Client{
+		logger: slog.Default(),
+		collaboratorsCache: &collaboratorsCache{
+			memory: make(map[string]collaboratorsEntry),
+		},
+	}
+	ctx := context.Background()
+
+	// Create test data with review threads containing outdated comments
+	data := &graphQLPullRequestComplete{
+		ReviewThreads: struct {
+			Nodes []struct {
+				Comments struct {
+					Nodes []struct {
+						CreatedAt         time.Time    `json:"createdAt"`
+						Author            graphQLActor `json:"author"`
+						ID                string       `json:"id"`
+						Body              string       `json:"body"`
+						Outdated          bool         `json:"outdated"`
+						AuthorAssociation string       `json:"authorAssociation"`
+					} `json:"nodes"`
+				} `json:"comments"`
+				IsResolved bool `json:"isResolved"`
+				IsOutdated bool `json:"isOutdated"`
+			} `json:"nodes"`
+		}{
+			Nodes: []struct {
+				Comments struct {
+					Nodes []struct {
+						CreatedAt         time.Time    `json:"createdAt"`
+						Author            graphQLActor `json:"author"`
+						ID                string       `json:"id"`
+						Body              string       `json:"body"`
+						Outdated          bool         `json:"outdated"`
+						AuthorAssociation string       `json:"authorAssociation"`
+					} `json:"nodes"`
+				} `json:"comments"`
+				IsResolved bool `json:"isResolved"`
+				IsOutdated bool `json:"isOutdated"`
+			}{
+				{
+					IsOutdated: true,
+					IsResolved: true,
+					Comments: struct {
+						Nodes []struct {
+							CreatedAt         time.Time    `json:"createdAt"`
+							Author            graphQLActor `json:"author"`
+							ID                string       `json:"id"`
+							Body              string       `json:"body"`
+							Outdated          bool         `json:"outdated"`
+							AuthorAssociation string       `json:"authorAssociation"`
+						} `json:"nodes"`
+					}{
+						Nodes: []struct {
+							CreatedAt         time.Time    `json:"createdAt"`
+							Author            graphQLActor `json:"author"`
+							ID                string       `json:"id"`
+							Body              string       `json:"body"`
+							Outdated          bool         `json:"outdated"`
+							AuthorAssociation string       `json:"authorAssociation"`
+						}{
+							{
+								ID:                "comment1",
+								Body:              "Should be Unlock() I think?",
+								CreatedAt:         time.Date(2025, 7, 18, 16, 46, 27, 0, time.UTC),
+								Outdated:          true,
+								Author:            graphQLActor{Login: "reviewer1"},
+								AuthorAssociation: "CONTRIBUTOR",
+							},
+							{
+								ID:                "comment2",
+								Body:              "eh yeah, absolutely! Good catch!",
+								CreatedAt:         time.Date(2025, 7, 18, 16, 50, 21, 0, time.UTC),
+								Outdated:          true,
+								Author:            graphQLActor{Login: "author1"},
+								AuthorAssociation: "OWNER",
+							},
+						},
+					},
+				},
+				{
+					IsOutdated: false,
+					IsResolved: false,
+					Comments: struct {
+						Nodes []struct {
+							CreatedAt         time.Time    `json:"createdAt"`
+							Author            graphQLActor `json:"author"`
+							ID                string       `json:"id"`
+							Body              string       `json:"body"`
+							Outdated          bool         `json:"outdated"`
+							AuthorAssociation string       `json:"authorAssociation"`
+						} `json:"nodes"`
+					}{
+						Nodes: []struct {
+							CreatedAt         time.Time    `json:"createdAt"`
+							Author            graphQLActor `json:"author"`
+							ID                string       `json:"id"`
+							Body              string       `json:"body"`
+							Outdated          bool         `json:"outdated"`
+							AuthorAssociation string       `json:"authorAssociation"`
+						}{
+							{
+								ID:                "comment3",
+								Body:              "This looks good to me",
+								CreatedAt:         time.Date(2025, 7, 19, 10, 0, 0, 0, time.UTC),
+								Outdated:          false,
+								Author:            graphQLActor{Login: "reviewer2"},
+								AuthorAssociation: "MEMBER",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert GraphQL data to events
+	events := client.convertGraphQLToEventsComplete(ctx, data, "testowner", "testrepo")
+
+	// Filter to only review_comment events
+	var reviewComments []Event
+	for _, event := range events {
+		if event.Kind == "review_comment" {
+			reviewComments = append(reviewComments, event)
+		}
+	}
+
+	// Verify we got 3 review comments
+	if len(reviewComments) != 3 {
+		t.Fatalf("Expected 3 review comments, got %d", len(reviewComments))
+	}
+
+	// Verify first comment is outdated
+	if !reviewComments[0].Outdated {
+		t.Errorf("Expected first comment to be outdated")
+	}
+	if reviewComments[0].Body != "Should be Unlock() I think?" {
+		t.Errorf("Expected first comment body 'Should be Unlock() I think?', got '%s'", reviewComments[0].Body)
+	}
+
+	// Verify second comment is outdated
+	if !reviewComments[1].Outdated {
+		t.Errorf("Expected second comment to be outdated")
+	}
+	if reviewComments[1].Body != "eh yeah, absolutely! Good catch!" {
+		t.Errorf("Expected second comment body 'eh yeah, absolutely! Good catch!', got '%s'", reviewComments[1].Body)
+	}
+
+	// Verify third comment is NOT outdated
+	if reviewComments[2].Outdated {
+		t.Errorf("Expected third comment to NOT be outdated")
+	}
+	if reviewComments[2].Body != "This looks good to me" {
+		t.Errorf("Expected third comment body 'This looks good to me', got '%s'", reviewComments[2].Body)
 	}
 }

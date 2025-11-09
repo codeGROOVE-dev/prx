@@ -123,4 +123,5 @@ type Event struct {
 	TargetIsBot bool      `json:"target_is_bot,omitempty"`
 	Question    bool      `json:"question,omitempty"`
 	Required    bool      `json:"required,omitempty"`
+	Outdated    bool      `json:"outdated,omitempty"` // For review comments: indicates comment is on outdated code
 }

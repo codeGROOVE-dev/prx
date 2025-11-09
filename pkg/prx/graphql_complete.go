@@ -219,6 +219,7 @@ query($owner: String!, $repo: String!, $number: Int!, $prCursor: String, $review
 							id
 							body
 							createdAt
+							outdated
 							authorAssociation
 							author {
 								__typename
@@ -949,6 +950,7 @@ type graphQLPullRequestComplete struct {
 					Author            graphQLActor `json:"author"`
 					ID                string       `json:"id"`
 					Body              string       `json:"body"`
+					Outdated          bool         `json:"outdated"`
 					AuthorAssociation string       `json:"authorAssociation"`
 				} `json:"nodes"`
 			} `json:"comments"`
@@ -1220,8 +1222,10 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 	}
 
 	// Review comments
-	for _, thread := range data.ReviewThreads.Nodes {
-		for _, comment := range thread.Comments.Nodes {
+	for i := range data.ReviewThreads.Nodes {
+		thread := &data.ReviewThreads.Nodes[i]
+		for j := range thread.Comments.Nodes {
+			comment := &thread.Comments.Nodes[j]
 			event := Event{
 				Kind:        "review_comment",
 				Timestamp:   comment.CreatedAt,
@@ -1230,6 +1234,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 				Question:    containsQuestion(comment.Body),
 				Bot:         isBot(comment.Author),
 				WriteAccess: c.writeAccessFromAssociation(ctx, owner, repo, comment.Author.Login, comment.AuthorAssociation),
+				Outdated:    comment.Outdated,
 			}
 			events = append(events, event)
 		}
