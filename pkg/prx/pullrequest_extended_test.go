@@ -39,14 +39,14 @@ func TestFinalizePullRequest(t *testing.T) {
 			},
 			events: []Event{
 				{
-					Kind:        EventKindReview,
+					Kind:        "review",
 					Actor:       "reviewer",
 					Timestamp:   now,
 					Outcome:     "APPROVED",
 					WriteAccess: WriteAccessDefinitely,
 				},
 				{
-					Kind:      EventKindStatusCheck,
+					Kind:      "status_check",
 					Timestamp: now,
 					Body:      "test",
 					Outcome:   "success",
@@ -65,7 +65,7 @@ func TestFinalizePullRequest(t *testing.T) {
 			},
 			events: []Event{
 				{
-					Kind:      EventKindStatusCheck,
+					Kind:      "status_check",
 					Timestamp: now,
 					Body:      "test",
 					Outcome:   "failure",
