@@ -166,14 +166,11 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 			case WriteAccessDefinitely:
 				// Confirmed write access (OWNER, COLLABORATOR, or verified MEMBER)
 				summary.ApprovalsWithWriteAccess++
-			case WriteAccessLikely, WriteAccessNA, WriteAccessUnlikely:
-				// Unknown/uncertain write access (unverified MEMBER, CONTRIBUTOR with unknown status, NA)
-				summary.ApprovalsWithUnknownAccess++
 			case WriteAccessNo:
 				// Confirmed no write access (explicitly denied)
 				summary.ApprovalsWithoutWriteAccess++
 			default:
-				// Fallback for any unexpected values - treat as unknown
+				// Unknown/uncertain write access or unexpected values - treat as unknown
 				summary.ApprovalsWithUnknownAccess++
 			}
 		case "changes_requested":

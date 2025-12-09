@@ -3,6 +3,7 @@ package prx
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -40,27 +41,23 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 	// 2. Fetch check runs via REST for all commits (GraphQL's statusCheckRollup is often null)
 	// This ensures we capture check run history including failures from earlier commits
 	checkRunEvents := c.fetchAllCheckRunsREST(ctx, owner, repo, prData)
-	{
-		// Mark check runs as required based on combined list
-		for i := range checkRunEvents {
-			for _, req := range existingRequired {
-				if checkRunEvents[i].Body == req {
-					checkRunEvents[i].Required = true
-					break
-				}
-			}
+
+	// Mark check runs as required based on combined list
+	for i := range checkRunEvents {
+		if slices.Contains(existingRequired, checkRunEvents[i].Body) {
+			checkRunEvents[i].Required = true
 		}
-
-		// Add check run events to the events list
-		prData.Events = append(prData.Events, checkRunEvents...)
-
-		// Recalculate check summary with the new check run data
-		if len(checkRunEvents) > 0 {
-			c.recalculateCheckSummaryWithCheckRuns(ctx, prData, checkRunEvents)
-		}
-
-		c.logger.InfoContext(ctx, "fetched check runs via REST", "count", len(checkRunEvents))
 	}
+
+	// Add check run events to the events list
+	prData.Events = append(prData.Events, checkRunEvents...)
+
+	// Recalculate check summary with the new check run data
+	if len(checkRunEvents) > 0 {
+		c.recalculateCheckSummaryWithCheckRuns(ctx, prData, checkRunEvents)
+	}
+
+	c.logger.InfoContext(ctx, "fetched check runs via REST", "count", len(checkRunEvents))
 
 	// Sort all events chronologically (oldest to newest)
 	sort.Slice(prData.Events, func(i, j int) bool {
@@ -241,13 +238,7 @@ func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 	if prData.PullRequest.CheckSummary != nil {
 		for check := range prData.PullRequest.CheckSummary.Pending {
 			// Check if it's not already in the list
-			found := false
-			for _, r := range required {
-				if r == check {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(required, check)
 			if !found {
 				required = append(required, check)
 			}

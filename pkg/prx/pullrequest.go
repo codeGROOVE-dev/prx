@@ -94,6 +94,7 @@ type ApprovalSummary struct {
 
 // PullRequestData contains a pull request and all its associated events.
 type PullRequestData struct {
+	CachedAt    time.Time   `json:"cached_at,omitzero"` // When this data was cached
 	Events      []Event     `json:"events"`
 	PullRequest PullRequest `json:"pull_request"`
 }

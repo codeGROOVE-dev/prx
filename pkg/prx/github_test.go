@@ -1,8 +1,10 @@
+//nolint:errcheck // Test handlers don't need to check w.Write errors
 package prx
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -83,7 +85,8 @@ func TestGithubClient_DoRequest(t *testing.T) {
 				if err == nil {
 					t.Errorf("Expected error but got none")
 				}
-				if apiErr, ok := err.(*GitHubAPIError); ok {
+				var apiErr *GitHubAPIError
+				if errors.As(err, &apiErr) {
 					if apiErr.StatusCode != tt.wantStatusCode {
 						t.Errorf("Expected status code %d, got %d", tt.wantStatusCode, apiErr.StatusCode)
 					}
@@ -118,7 +121,6 @@ func TestGithubClient_Get(t *testing.T) {
 
 	var user githubUser
 	resp, err := client.get(context.Background(), "/users/testuser", &user)
-
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -147,7 +149,6 @@ func TestGithubClient_Raw(t *testing.T) {
 	}
 
 	raw, resp, err := client.raw(context.Background(), "/test")
-
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -158,7 +159,7 @@ func TestGithubClient_Raw(t *testing.T) {
 		t.Fatal("Expected raw data but got empty")
 	}
 
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatalf("Failed to unmarshal raw data: %v", err)
 	}

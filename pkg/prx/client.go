@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/codeGROOVE-dev/sfcache"
 )
 
 const (
@@ -29,7 +31,7 @@ type Client struct {
 	}
 	logger             *slog.Logger
 	token              string // Store token for recreating client with new transport
-	collaboratorsCache *collaboratorsCache
+	collaboratorsCache *sfcache.MemoryCache[string, map[string]string]
 	cacheDir           string // empty if caching is disabled
 }
 
@@ -60,10 +62,6 @@ func WithHTTPClient(httpClient *http.Client) Option {
 func WithNoCache() Option {
 	return func(c *Client) {
 		c.cacheDir = ""
-		// Clear disk path from collaborators cache
-		c.collaboratorsCache = &collaboratorsCache{
-			memory: c.collaboratorsCache.memory, // Keep in-memory cache
-		}
 	}
 }
 
@@ -85,9 +83,10 @@ func NewClient(token string, opts ...Option) *Client {
 	}
 	defaultCacheDir := filepath.Join(userCacheDir, "prx")
 	c := &Client{
-		logger:   slog.Default(),
-		token:    token,
-		cacheDir: defaultCacheDir, // Enable caching by default
+		logger:             slog.Default(),
+		token:              token,
+		cacheDir:           defaultCacheDir, // Enable caching by default
+		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
 		github: &githubClient{
 			client: &http.Client{
 				Transport: &RetryTransport{Base: transport},
@@ -96,21 +95,6 @@ func NewClient(token string, opts ...Option) *Client {
 			token: token,
 			api:   githubAPI,
 		},
-	}
-	// Initialize collaborators cache with disk persistence if caching is enabled
-	if defaultCacheDir != "" {
-		if err := os.MkdirAll(defaultCacheDir, 0o700); err == nil {
-			c.collaboratorsCache = newCollaboratorsCache(defaultCacheDir)
-		} else {
-			// Fall back to in-memory only cache if directory creation fails
-			c.collaboratorsCache = &collaboratorsCache{
-				memory: make(map[string]collaboratorsEntry),
-			}
-		}
-	} else {
-		c.collaboratorsCache = &collaboratorsCache{
-			memory: make(map[string]collaboratorsEntry),
-		}
 	}
 
 	for _, opt := range opts {
@@ -132,8 +116,18 @@ func (c *Client) PullRequestWithReferenceTime(
 	referenceTime time.Time,
 ) (*PullRequestData, error) {
 	if c.cacheDir != "" {
-		cacheClient := &CacheClient{Client: c, cacheDir: c.cacheDir}
-		return cacheClient.cachedPullRequestViaGraphQL(ctx, owner, repo, prNumber, referenceTime)
+		cache, err := newCache(c.cacheDir, c.logger)
+		if err != nil {
+			c.logger.WarnContext(ctx, "failed to create cache, proceeding without caching", "error", err)
+			return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+		}
+		defer func() {
+			if closeErr := cache.close(); closeErr != nil {
+				c.logger.WarnContext(ctx, "failed to close cache", "error", closeErr)
+			}
+		}()
+		cacheClient := &CacheClient{Client: c, cache: cache}
+		return cacheClient.PullRequestWithReferenceTime(ctx, owner, repo, prNumber, referenceTime)
 	}
 	return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
 }

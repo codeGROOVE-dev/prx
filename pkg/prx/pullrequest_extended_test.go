@@ -9,14 +9,14 @@ func TestFinalizePullRequest(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
-		name               string
-		pr                 PullRequest
-		events             []Event
-		requiredChecks     []string
-		testStateFromAPI   string
-		wantTestState      string
-		wantMergeable      *bool
-		wantDescContains   string
+		name             string
+		pr               PullRequest
+		events           []Event
+		requiredChecks   []string
+		testStateFromAPI string
+		wantTestState    string
+		wantMergeable    *bool
+		wantDescContains string
 	}{
 		{
 			name: "blocked pr without approvals",
@@ -374,7 +374,7 @@ func boolPtr(b bool) *bool {
 }
 
 func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) >= len(substr) && findSubstring(s, substr))
+	return s != "" && substr != "" && (s == substr || len(s) >= len(substr) && findSubstring(s, substr))
 }
 
 func findSubstring(s, substr string) bool {

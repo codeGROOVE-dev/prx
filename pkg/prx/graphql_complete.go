@@ -1607,60 +1607,42 @@ func (c *Client) writeAccessFromAssociation(ctx context.Context, owner, repo, us
 }
 
 // checkCollaboratorPermission checks if a user has write access by looking them up in the collaborators list.
-// Uses cache to avoid repeated API calls (4 hour TTL).
+// Uses cache to avoid repeated API calls (4 hour TTL) with thundering herd protection.
 func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, user string) int {
-	// Check cache first
-	if collabs, ok := c.collaboratorsCache.get(owner, repo); ok {
-		switch collabs[user] {
-		case "admin", "maintain", "write":
-			return WriteAccessDefinitely
-		case "read", "triage", "none":
-			return WriteAccessNo
-		default:
-			// User not in collaborators list
-			return WriteAccessUnlikely
+	cacheKey := collaboratorsCacheKey(owner, repo)
+
+	// Use GetSet for thundering herd protection - only one goroutine fetches collaborators
+	collabs, err := c.collaboratorsCache.GetSet(cacheKey, func() (map[string]string, error) {
+		gc, ok := c.github.(*githubClient)
+		if !ok {
+			// Not a real GitHub client (probably test mock) - return nil to signal cache miss
+			return nil, errNotGitHubClient
 		}
-	}
 
-	// Cache miss - fetch collaborators from API
-	gc, ok := c.github.(*githubClient)
-	if !ok {
-		// Not a real GitHub client (probably test mock) - return likely as fallback
-		return WriteAccessLikely
-	}
+		result, fetchErr := gc.collaborators(ctx, owner, repo)
+		if fetchErr != nil {
+			c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",
+				"owner", owner,
+				"repo", repo,
+				"user", user,
+				"error", fetchErr)
 
-	collabs, err := gc.collaborators(ctx, owner, repo)
-	if err != nil {
-		// API call failed (could be 403 if no permission to list collaborators)
-		c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",
-			"owner", owner,
-			"repo", repo,
-			"user", user,
-			"error", err)
-
-		// If it's a 403 (permission denied), cache an empty result to avoid retrying
-		// This prevents repeated API calls for repos where we don't have access
-		var apiErr *GitHubAPIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
-			// Cache empty collaborators map to prevent future retries
-			if cacheErr := c.collaboratorsCache.set(owner, repo, make(map[string]string)); cacheErr != nil {
-				c.logger.WarnContext(ctx, "failed to cache empty collaborators for 403",
-					"owner", owner,
-					"repo", repo,
-					"error", cacheErr)
+			// If it's a 403 (permission denied), cache an empty result to avoid retrying
+			var apiErr *GitHubAPIError
+			if errors.As(fetchErr, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+				return make(map[string]string), nil
 			}
+
+			return nil, fetchErr
 		}
 
+		return result, nil
+	})
+	if err != nil {
+		if errors.Is(err, errNotGitHubClient) {
+			return WriteAccessLikely
+		}
 		return WriteAccessLikely
-	}
-
-	// Store in cache
-	if err := c.collaboratorsCache.set(owner, repo, collabs); err != nil {
-		// Cache write failed, just log it and continue
-		c.logger.WarnContext(ctx, "failed to cache collaborators",
-			"owner", owner,
-			"repo", repo,
-			"error", err)
 	}
 
 	switch collabs[user] {
@@ -1669,10 +1651,12 @@ func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, u
 	case "read", "triage", "none":
 		return WriteAccessNo
 	default:
-		// User not in collaborators list
 		return WriteAccessUnlikely
 	}
 }
+
+// errNotGitHubClient is returned when the github client is not a real githubClient.
+var errNotGitHubClient = errors.New("not a github client")
 
 // extractRequiredChecksFromGraphQL gets required checks from GraphQL response.
 func (*Client) extractRequiredChecksFromGraphQL(data *graphQLPullRequestComplete) []string {

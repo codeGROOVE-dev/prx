@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/codeGROOVE-dev/sfcache"
 )
 
 func TestIsBot(t *testing.T) {
@@ -139,10 +141,8 @@ func TestGraphQLPageInfo(t *testing.T) {
 
 func TestConvertGraphQLReviewCommentsWithOutdated(t *testing.T) {
 	client := &Client{
-		logger: slog.Default(),
-		collaboratorsCache: &collaboratorsCache{
-			memory: make(map[string]collaboratorsEntry),
-		},
+		logger:             slog.Default(),
+		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
 	}
 	ctx := context.Background()
 

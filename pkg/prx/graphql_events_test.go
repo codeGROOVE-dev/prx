@@ -1,3 +1,4 @@
+//nolint:errcheck,gocritic // Test handlers don't need to check w.Write errors; if-else chains are fine for URL routing
 package prx
 
 import (
@@ -153,7 +154,6 @@ func TestClient_PullRequestWithReviews(t *testing.T) {
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 789)
-
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -274,7 +274,6 @@ func TestClient_PullRequestWithBots(t *testing.T) {
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 999)
-
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}

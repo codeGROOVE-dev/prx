@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/codeGROOVE-dev/sfcache"
 )
 
 // TestGraphQLParity verifies that GraphQL implementation returns the same data as REST
@@ -251,7 +253,7 @@ func TestWriteAccessMapping(t *testing.T) {
 	ctx := context.Background()
 	c := &Client{
 		logger:             slog.Default(),
-		collaboratorsCache: &collaboratorsCache{memory: make(map[string]collaboratorsEntry)},
+		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
 	}
 
 	tests := []struct {

@@ -157,8 +157,8 @@ func (c *githubClient) doRequest(ctx context.Context, path string) ([]byte, *git
 	// Parse Link header for pagination
 	nextPageNum := 0
 	linkHeader := resp.Header.Get("Link")
-	links := strings.Split(linkHeader, ",")
-	for _, link := range links {
+	links := strings.SplitSeq(linkHeader, ",")
+	for link := range links {
 		parts := strings.Split(strings.TrimSpace(link), ";")
 		if len(parts) == 2 && strings.TrimSpace(parts[1]) == `rel="next"` {
 			u, err := url.Parse(strings.Trim(parts[0], "<>"))

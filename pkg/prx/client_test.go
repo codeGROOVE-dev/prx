@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/codeGROOVE-dev/sfcache"
 )
 
 // mockGithubClient is a mock implementation for testing
@@ -16,7 +18,7 @@ type mockGithubClient struct {
 	calls     []string
 }
 
-func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*githubResponse, error) {
+func (m *mockGithubClient) get(_ context.Context, path string, v any) (*githubResponse, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, path)
 	m.mu.Unlock()
@@ -33,7 +35,7 @@ func (m *mockGithubClient) get(ctx context.Context, path string, v any) (*github
 	return &githubResponse{NextPage: 0}, nil
 }
 
-func (m *mockGithubClient) raw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error) {
+func (m *mockGithubClient) raw(_ context.Context, path string) (json.RawMessage, *githubResponse, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, path)
 	m.mu.Unlock()
@@ -50,7 +52,8 @@ func (m *mockGithubClient) raw(ctx context.Context, path string) (json.RawMessag
 	return json.RawMessage("[]"), &githubResponse{NextPage: 0}, nil
 }
 
-func (m *mockGithubClient) collaborators(ctx context.Context, owner, repo string) (map[string]string, error) {
+//nolint:unparam // Mock always returns nil error - matches interface signature
+func (m *mockGithubClient) collaborators(_ context.Context, owner, repo string) (map[string]string, error) {
 	path := "/repos/" + owner + "/" + repo + "/collaborators"
 	m.calls = append(m.calls, path)
 
@@ -112,11 +115,9 @@ func TestClientWithMock(t *testing.T) {
 	}
 
 	client := &Client{
-		github: mock,
-		logger: slog.Default(),
-		collaboratorsCache: &collaboratorsCache{
-			memory: make(map[string]collaboratorsEntry),
-		},
+		github:             mock,
+		logger:             slog.Default(),
+		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
 	}
 
 	ctx := context.Background()

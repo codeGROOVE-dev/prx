@@ -4,69 +4,119 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/sfcache/pkg/persist/localfs"
 )
 
 const (
-	// cacheRetentionPeriod is how long cache files are kept before cleanup.
-	cacheRetentionPeriod = 20 * 24 * time.Hour // 20 days
-	// cacheDirPerms is the permission for cache directories.
-	cacheDirPerms = 0o700
-	// cacheFilePerms is the permission for cache files.
-	cacheFilePerms = 0o600
-
-	// Log field constants.
-	logFieldError = "error"
+	// prCacheTTL is how long PR data is cached.
+	prCacheTTL = 20 * 24 * time.Hour // 20 days
+	// collaboratorsCacheTTL is how long collaborators data is cached.
+	collaboratorsCacheTTL = 4 * time.Hour
 )
 
-// CacheClient wraps the regular Client and adds disk-based caching.
-type CacheClient struct {
-	*Client
-
-	cacheDir string
+// prxCache provides tiered caching with disk persistence using sfcache.
+type prxCache struct {
+	pr     *sfcache.TieredCache[string, PullRequestData]
+	logger *slog.Logger
 }
 
-// cacheEntry represents a cached API response.
-type cacheEntry struct {
-	UpdatedAt time.Time       `json:"updated_at"`
-	CachedAt  time.Time       `json:"cached_at"`
-	Data      json.RawMessage `json:"data"`
-}
+// newCache creates a new cache with disk persistence at the given directory.
+func newCache(cacheDir string, logger *slog.Logger) (*prxCache, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 
-// NewCacheClient creates a new caching client with the given cache directory.
-func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
 	cleanPath := filepath.Clean(cacheDir)
 	if !filepath.IsAbs(cleanPath) {
 		return nil, errors.New("cache directory must be absolute path")
 	}
 
-	if err := os.MkdirAll(cleanPath, cacheDirPerms); err != nil {
+	if err := os.MkdirAll(cleanPath, 0o700); err != nil {
 		return nil, fmt.Errorf("creating cache directory: %w", err)
+	}
+
+	prStore, err := localfs.New[string, PullRequestData]("prx-pr", cleanPath)
+	if err != nil {
+		return nil, fmt.Errorf("creating PR cache store: %w", err)
+	}
+
+	prCache, err := sfcache.NewTiered(prStore, sfcache.TTL(prCacheTTL))
+	if err != nil {
+		return nil, fmt.Errorf("creating PR cache: %w", err)
+	}
+
+	return &prxCache{
+		pr:     prCache,
+		logger: logger,
+	}, nil
+}
+
+// close releases cache resources.
+func (c *prxCache) close() error {
+	if c.pr != nil {
+		return c.pr.Close()
+	}
+	return nil
+}
+
+// prCacheKey generates a cache key for PR data.
+func prCacheKey(owner, repo string, prNumber int) string {
+	key := strings.Join([]string{"graphql", "pr_graphql", owner, repo, strconv.Itoa(prNumber)}, "/")
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:])
+}
+
+// collaboratorsCacheKey generates a cache key for collaborators data.
+func collaboratorsCacheKey(owner, repo string) string {
+	return fmt.Sprintf("%s/%s", owner, repo)
+}
+
+// CacheClient wraps the regular Client and adds disk-based caching.
+type CacheClient struct {
+	*Client
+
+	cache *prxCache
+}
+
+// NewCacheClient creates a new caching client with the given cache directory.
+func NewCacheClient(token string, cacheDir string, opts ...Option) (*CacheClient, error) {
+	// Create a temporary logger to use during cache creation
+	logger := slog.Default()
+
+	cache, err := newCache(cacheDir, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create client with no cache since CacheClient handles caching
 	opts = append(opts, WithNoCache())
 	client := NewClient(token, opts...)
 
-	// Initialize cache with disk persistence for CacheClient
-	client.collaboratorsCache = newCollaboratorsCache(cleanPath)
+	// Update logger to the one from client options
+	cache.logger = client.logger
 
-	cc := &CacheClient{
-		Client:   client,
-		cacheDir: cleanPath,
+	return &CacheClient{
+		Client: client,
+		cache:  cache,
+	}, nil
+}
+
+// Close releases cache resources.
+func (c *CacheClient) Close() error {
+	if c.cache != nil {
+		return c.cache.close()
 	}
-
-	// Schedule cleanup in background
-	go cc.cleanOldCaches()
-
-	return cc, nil
+	return nil
 }
 
 // PullRequest fetches a pull request with all its events and metadata, with caching support.
@@ -74,31 +124,35 @@ func (c *CacheClient) PullRequest(ctx context.Context, owner, repo string, prNum
 	return c.PullRequestWithReferenceTime(ctx, owner, repo, prNumber, referenceTime)
 }
 
-// cachedPullRequestViaGraphQL fetches pull request data via GraphQL with caching support.
-func (c *CacheClient) cachedPullRequestViaGraphQL(
+// PullRequestWithReferenceTime fetches PR data using GetSet for thundering herd protection.
+func (c *CacheClient) PullRequestWithReferenceTime(
 	ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time,
 ) (*PullRequestData, error) {
-	cacheKey := c.cacheKey("pr_graphql", owner, repo, strconv.Itoa(prNumber))
+	if c.cache == nil || c.cache.pr == nil {
+		return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+	}
 
-	// Try to load from cache
-	var cached cacheEntry
-	if c.loadCache(ctx, cacheKey, &cached) {
-		// Cache is valid if it was cached at or after the reference time
+	cacheKey := prCacheKey(owner, repo, prNumber)
+
+	// Try to get from cache first with time validation
+	cached, found, err := c.cache.pr.Get(ctx, cacheKey)
+	if err != nil {
+		c.logger.WarnContext(ctx, "cache get error",
+			"owner", owner,
+			"repo", repo,
+			"pr", prNumber,
+			"error", err)
+	}
+	if found {
+		// Check if cache entry is fresh enough (cached after reference time)
+		// Note: sfcache handles TTL expiration; we check freshness against referenceTime
 		if cached.CachedAt.After(referenceTime) || cached.CachedAt.Equal(referenceTime) {
-			var prData PullRequestData
-			err := json.Unmarshal(cached.Data, &prData)
-			if err != nil {
-				c.logger.WarnContext(ctx, "failed to unmarshal cached GraphQL pull request", logFieldError, err)
-				// Continue to fetch from API instead of returning error
-				goto fetchFromAPI
-			}
-
 			c.logger.InfoContext(ctx, "cache hit: GraphQL pull request",
 				"owner", owner,
 				"repo", repo,
 				"pr", prNumber,
 				"cached_at", cached.CachedAt)
-			return &prData, nil
+			return &cached, nil
 		}
 		c.logger.InfoContext(ctx, "cache miss: GraphQL pull request expired",
 			"owner", owner,
@@ -106,6 +160,10 @@ func (c *CacheClient) cachedPullRequestViaGraphQL(
 			"pr", prNumber,
 			"cached_at", cached.CachedAt,
 			"reference_time", referenceTime)
+		// Delete stale entry so GetSet will fetch fresh data
+		if delErr := c.cache.pr.Delete(ctx, cacheKey); delErr != nil {
+			c.logger.WarnContext(ctx, "failed to delete stale cache entry", "error", delErr)
+		}
 	} else {
 		c.logger.InfoContext(ctx, "cache miss: GraphQL pull request not in cache",
 			"owner", owner,
@@ -113,136 +171,18 @@ func (c *CacheClient) cachedPullRequestViaGraphQL(
 			"pr", prNumber)
 	}
 
-fetchFromAPI:
-	// Fetch from API
-	prData, err := c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+	// Fetch from API using GetSet for thundering herd protection
+	result, err := c.cache.pr.GetSet(ctx, cacheKey, func(ctx context.Context) (PullRequestData, error) {
+		prData, err := c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+		if err != nil {
+			return PullRequestData{}, err
+		}
+		prData.CachedAt = time.Now()
+		return *prData, nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Cache the result
-	data, err := json.Marshal(prData)
-	if err != nil {
-		c.logger.WarnContext(ctx, "failed to marshal GraphQL pull request for cache", logFieldError, err)
-		return prData, nil
-	}
-
-	entry := cacheEntry{
-		Data:     data,
-		CachedAt: time.Now(),
-	}
-
-	err = c.saveCache(ctx, cacheKey, entry)
-	if err != nil {
-		c.logger.WarnContext(ctx, "failed to save GraphQL pull request to cache", logFieldError, err)
-	}
-
-	return prData, nil
-}
-
-func (*CacheClient) cacheKey(parts ...string) string {
-	// Always use graphql mode now
-	allParts := append([]string{"graphql"}, parts...)
-	key := strings.Join(allParts, "/")
-	hash := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(hash[:])
-}
-
-func (c *CacheClient) loadCache(ctx context.Context, key string, v any) bool {
-	path := filepath.Join(c.cacheDir, key+".json")
-
-	file, err := os.Open(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			c.logger.DebugContext(ctx, "failed to open cache file", "error", err, "path", path)
-		}
-		return false
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			c.logger.DebugContext(ctx, "failed to close cache file", "error", closeErr, "path", path)
-		}
-	}()
-
-	if err := json.NewDecoder(file).Decode(v); err != nil {
-		c.logger.WarnContext(ctx, "failed to decode cache file", "error", err, "path", path)
-		return false
-	}
-
-	return true
-}
-
-func (c *CacheClient) saveCache(ctx context.Context, key string, v any) error {
-	path := filepath.Join(c.cacheDir, key+".json")
-
-	tmpPath := path + ".tmp"
-	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cacheFilePerms)
-	if err != nil {
-		return fmt.Errorf("creating cache file: %w", err)
-	}
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(v); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			c.logger.DebugContext(ctx, "failed to close temp file", "error", closeErr, "path", tmpPath)
-		}
-		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			c.logger.DebugContext(ctx, "failed to remove temp file", "error", removeErr, "path", tmpPath)
-		}
-		return fmt.Errorf("encoding cache data: %w", err)
-	}
-
-	if err := file.Close(); err != nil {
-		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			c.logger.DebugContext(ctx, "failed to remove temp file", "error", removeErr, "path", tmpPath)
-		}
-		return fmt.Errorf("closing cache file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			c.logger.DebugContext(ctx, "failed to remove temp file", "error", removeErr, "path", tmpPath)
-		}
-		return fmt.Errorf("renaming cache file: %w", err)
-	}
-
-	return nil
-}
-
-func (c *CacheClient) cleanOldCaches() {
-	c.logger.Debug("cleaning old cache files")
-
-	entries, err := os.ReadDir(c.cacheDir)
-	if err != nil {
-		c.logger.Error("failed to read cache directory", "error", err)
-		return
-	}
-
-	cutoff := time.Now().Add(-cacheRetentionPeriod)
-	removed := 0
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		if info.ModTime().Before(cutoff) {
-			path := filepath.Join(c.cacheDir, entry.Name())
-			if err := os.Remove(path); err != nil {
-				c.logger.Warn("failed to remove old cache file", "path", path, "error", err)
-			} else {
-				removed++
-			}
-		}
-	}
-
-	if removed > 0 {
-		c.logger.Info("cleaned old cache files", "removed", removed)
-	}
+	return &result, nil
 }

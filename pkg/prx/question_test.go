@@ -385,8 +385,7 @@ func BenchmarkContainsQuestion(b *testing.B) {
 		"What do you think about using GraphQL instead of REST for this API endpoint implementation?",
 	}
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		for _, tc := range testCases {
 			_ = containsQuestion(tc)
 		}

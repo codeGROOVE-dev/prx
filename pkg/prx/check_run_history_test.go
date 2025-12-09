@@ -1,3 +1,4 @@
+//nolint:errcheck,gocritic // Test handlers don't need to check w.Write errors; if-else chains are fine for URL routing
 package prx
 
 import (
@@ -188,9 +189,10 @@ func TestCheckRunHistory_MultipleCommits(t *testing.T) {
 		if event.Kind == "check_run" {
 			checkRunCount++
 			checkRunEvents = append(checkRunEvents, event)
-			if event.Outcome == "failure" {
+			switch event.Outcome {
+			case "failure":
 				failureCount++
-			} else if event.Outcome == "success" {
+			case "success":
 				successCount++
 			}
 		}
@@ -469,9 +471,9 @@ func TestCalculateTestStateFromCheckSummary(t *testing.T) {
 	client := &Client{}
 
 	tests := []struct {
-		name        string
-		summary     *CheckSummary
-		wantState   string
+		name      string
+		summary   *CheckSummary
+		wantState string
 	}{
 		{
 			name:      "nil summary returns none",

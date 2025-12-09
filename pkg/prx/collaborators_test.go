@@ -4,7 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"testing"
-	"time"
+
+	"github.com/codeGROOVE-dev/sfcache"
 )
 
 // TestPermissionToWriteAccess tests permission level mapping
@@ -45,11 +46,9 @@ func TestPermissionToWriteAccess(t *testing.T) {
 	}
 }
 
-// TestCollaboratorsCacheGetSet tests cache get/set operations
+// TestCollaboratorsCacheGetSet tests cache get/set operations using sfcache
 func TestCollaboratorsCacheGetSet(t *testing.T) {
-	cache := &collaboratorsCache{
-		memory: make(map[string]collaboratorsEntry),
-	}
+	cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
 
 	owner := "testowner"
 	repo := "testrepo"
@@ -59,18 +58,18 @@ func TestCollaboratorsCacheGetSet(t *testing.T) {
 		"carol": "read",
 	}
 
+	cacheKey := collaboratorsCacheKey(owner, repo)
+
 	// Test cache miss
-	if _, ok := cache.get(owner, repo); ok {
+	if _, ok := cache.Get(cacheKey); ok {
 		t.Error("Expected cache miss, got hit")
 	}
 
 	// Test set
-	if err := cache.set(owner, repo, collabs); err != nil {
-		t.Errorf("cache.set() failed: %v", err)
-	}
+	cache.Set(cacheKey, collabs)
 
 	// Test cache hit
-	cached, ok := cache.get(owner, repo)
+	cached, ok := cache.Get(cacheKey)
 	if !ok {
 		t.Fatal("Expected cache hit, got miss")
 	}
@@ -83,29 +82,6 @@ func TestCollaboratorsCacheGetSet(t *testing.T) {
 		if cached[user] != perm {
 			t.Errorf("Expected %s permission for %s, got %s", perm, user, cached[user])
 		}
-	}
-}
-
-// TestCollaboratorsCacheExpiration tests cache expiration
-func TestCollaboratorsCacheExpiration(t *testing.T) {
-	cache := &collaboratorsCache{
-		memory: make(map[string]collaboratorsEntry),
-	}
-
-	owner := "testowner"
-	repo := "testrepo"
-	collabs := map[string]string{"alice": "admin"}
-
-	// Insert entry with old timestamp
-	key := owner + "/" + repo
-	cache.memory[key] = collaboratorsEntry{
-		Collaborators: collabs,
-		CachedAt:      time.Now().Add(-5 * time.Hour), // Expired (> 4 hours)
-	}
-
-	// Should return miss due to expiration
-	if _, ok := cache.get(owner, repo); ok {
-		t.Error("Expected cache miss due to expiration, got hit")
 	}
 }
 
@@ -160,9 +136,7 @@ func TestWriteAccessFromAssociationWithCache(t *testing.T) {
 			ctx := context.Background()
 
 			// Setup cache with test data
-			cache := &collaboratorsCache{
-				memory: make(map[string]collaboratorsEntry),
-			}
+			cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
 
 			collabs := map[string]string{
 				"alice":   "admin",
@@ -173,9 +147,8 @@ func TestWriteAccessFromAssociationWithCache(t *testing.T) {
 			}
 
 			// Pre-populate cache
-			if err := cache.set("owner", "repo", collabs); err != nil {
-				t.Fatalf("Failed to populate cache: %v", err)
-			}
+			cacheKey := collaboratorsCacheKey("owner", "repo")
+			cache.Set(cacheKey, collabs)
 
 			// Create client with cache
 			c := &Client{
@@ -197,18 +170,15 @@ func TestWriteAccessFromAssociationCacheHit(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup cache with test data
-	cache := &collaboratorsCache{
-		memory: make(map[string]collaboratorsEntry),
-	}
+	cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
 
 	collabs := map[string]string{
 		"tstromberg": "admin",
 	}
 
 	// Pre-populate cache
-	if err := cache.set("codeGROOVE-dev", "goose", collabs); err != nil {
-		t.Fatalf("Failed to populate cache: %v", err)
-	}
+	cacheKey := collaboratorsCacheKey("codeGROOVE-dev", "goose")
+	cache.Set(cacheKey, collabs)
 
 	// Create client with cache but without a real GitHub client
 	// This tests that we use the cache and don't try to call the API
@@ -230,9 +200,7 @@ func TestWriteAccessFromAssociationNonMember(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty cache
-	cache := &collaboratorsCache{
-		memory: make(map[string]collaboratorsEntry),
-	}
+	cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
 
 	c := &Client{
 		logger:             slog.Default(),
@@ -262,7 +230,8 @@ func TestWriteAccessFromAssociationNonMember(t *testing.T) {
 	}
 
 	// Verify cache wasn't used (should still be empty)
-	if _, ok := cache.get("owner", "repo"); ok {
+	cacheKey := collaboratorsCacheKey("owner", "repo")
+	if _, ok := cache.Get(cacheKey); ok {
 		t.Error("Cache should not have been populated for non-MEMBER associations")
 	}
 }

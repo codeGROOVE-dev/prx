@@ -1,8 +1,8 @@
+//nolint:errcheck,gocritic // Test handlers don't need to check w.Write errors; if-else chains are fine for URL routing
 package prx
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -135,7 +135,6 @@ func TestClient_PullRequestWithCheckRuns(t *testing.T) {
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 555)
-
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -156,7 +155,7 @@ func TestClient_PullRequestWithBranchProtection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/graphql" {
 			w.WriteHeader(http.StatusOK)
-			response := fmt.Sprintf(`{
+			_, _ = w.Write([]byte(`{
 				"data": {
 					"repository": {
 						"pullRequest": {
@@ -187,8 +186,7 @@ func TestClient_PullRequestWithBranchProtection(t *testing.T) {
 						}
 					}
 				}
-			}`)
-			_, _ = w.Write([]byte(response))
+			}`))
 		} else if strings.Contains(r.URL.Path, "/rulesets") {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[
@@ -253,7 +251,6 @@ func TestClient_PullRequestWithBranchProtection(t *testing.T) {
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 666)
-
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}

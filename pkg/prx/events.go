@@ -4,99 +4,78 @@ import (
 	"time"
 )
 
-// Event kind constants.
+// Event kind constants for PR timeline events.
 const (
-	// Core events.
-	EventKindCommit        = "commit"
-	EventKindComment       = "comment"
-	EventKindReview        = "review"
-	EventKindReviewComment = "review_comment"
+	EventKindCommit        = "commit"         // EventKindCommit represents a commit event.
+	EventKindComment       = "comment"        // EventKindComment represents a comment event.
+	EventKindReview        = "review"         // EventKindReview represents a review event.
+	EventKindReviewComment = "review_comment" // EventKindReviewComment represents a review comment event.
 
-	// Label events.
-	EventKindLabeled   = "labeled"
-	EventKindUnlabeled = "unlabeled"
+	EventKindLabeled   = "labeled"   // EventKindLabeled represents a label added event.
+	EventKindUnlabeled = "unlabeled" // EventKindUnlabeled represents a label removed event.
 
-	// Assignment events.
-	EventKindAssigned   = "assigned"
-	EventKindUnassigned = "unassigned"
+	EventKindAssigned   = "assigned"   // EventKindAssigned represents an assignment event.
+	EventKindUnassigned = "unassigned" // EventKindUnassigned represents an unassignment event.
 
-	// Milestone events.
-	EventKindMilestoned   = "milestoned"
-	EventKindDemilestoned = "demilestoned"
+	EventKindMilestoned   = "milestoned"   // EventKindMilestoned represents a milestone added event.
+	EventKindDemilestoned = "demilestoned" // EventKindDemilestoned represents a milestone removed event.
 
-	// Review request events.
-	EventKindReviewRequested      = "review_requested"
-	EventKindReviewRequestRemoved = "review_request_removed"
+	EventKindReviewRequested      = "review_requested"       // EventKindReviewRequested represents a review request event.
+	EventKindReviewRequestRemoved = "review_request_removed" // EventKindReviewRequestRemoved represents a review request removed event.
 
-	// PR state events.
-	EventKindPRMerged       = "pr_merged"
-	EventKindReadyForReview = "ready_for_review"
-	EventKindConvertToDraft = "convert_to_draft"
-	EventKindClosed         = "closed"
-	EventKindReopened       = "reopened"
+	EventKindPRMerged       = "pr_merged"        // EventKindPRMerged represents a PR merge event.
+	EventKindReadyForReview = "ready_for_review" // EventKindReadyForReview represents a ready for review event.
+	EventKindConvertToDraft = "convert_to_draft" // EventKindConvertToDraft represents a convert to draft event.
+	EventKindClosed         = "closed"           // EventKindClosed represents a PR closed event.
+	EventKindReopened       = "reopened"         // EventKindReopened represents a PR reopened event.
 
-	// Reference events.
-	EventKindMentioned       = "mentioned"
-	EventKindReferenced      = "referenced"
-	EventKindCrossReferenced = "cross-referenced"
+	EventKindMentioned       = "mentioned"        // EventKindMentioned represents a mention event.
+	EventKindReferenced      = "referenced"       // EventKindReferenced represents a reference event.
+	EventKindCrossReferenced = "cross-referenced" // EventKindCrossReferenced represents a cross-reference event.
 
-	// Project events.
-	EventKindAddedToProject        = "added_to_project"
-	EventKindMovedColumnsInProject = "moved_columns_in_project"
-	EventKindRemovedFromProject    = "removed_from_project"
-	EventKindConvertedNoteToIssue  = "converted_note_to_issue"
+	EventKindAddedToProject        = "added_to_project"         // EventKindAddedToProject represents an added to project event.
+	EventKindMovedColumnsInProject = "moved_columns_in_project" // EventKindMovedColumnsInProject represents a project column move event.
+	EventKindRemovedFromProject    = "removed_from_project"     // EventKindRemovedFromProject represents a removed from project event.
+	EventKindConvertedNoteToIssue  = "converted_note_to_issue"  // EventKindConvertedNoteToIssue represents a note to issue conversion event.
 
-	// Pin events.
-	EventKindPinned   = "pinned"
-	EventKindUnpinned = "unpinned"
+	EventKindPinned   = "pinned"   // EventKindPinned represents a pin event.
+	EventKindUnpinned = "unpinned" // EventKindUnpinned represents an unpin event.
 
-	// Transfer events.
-	EventKindTransferred = "transferred"
+	EventKindTransferred = "transferred" // EventKindTransferred represents a transfer event.
 
-	// Subscription events.
-	EventKindSubscribed   = "subscribed"
-	EventKindUnsubscribed = "unsubscribed"
+	EventKindSubscribed   = "subscribed"   // EventKindSubscribed represents a subscription event.
+	EventKindUnsubscribed = "unsubscribed" // EventKindUnsubscribed represents an unsubscription event.
 
-	// Rename events.
-	EventKindRenamed = "renamed"
+	EventKindRenamed = "renamed" // EventKindRenamed represents a rename event.
 
-	// Head ref events.
-	EventKindHeadRefDeleted     = "head_ref_deleted"
-	EventKindHeadRefRestored    = "head_ref_restored"
-	EventKindHeadRefForcePushed = "head_ref_force_pushed"
+	EventKindHeadRefDeleted     = "head_ref_deleted"      // EventKindHeadRefDeleted represents a head ref deletion event.
+	EventKindHeadRefRestored    = "head_ref_restored"     // EventKindHeadRefRestored represents a head ref restoration event.
+	EventKindHeadRefForcePushed = "head_ref_force_pushed" // EventKindHeadRefForcePushed represents a head ref force push event.
 
-	// Base ref events.
-	EventKindBaseRefChanged     = "base_ref_changed"
-	EventKindBaseRefForcePushed = "base_ref_force_pushed"
+	EventKindBaseRefChanged     = "base_ref_changed"      // EventKindBaseRefChanged represents a base ref change event.
+	EventKindBaseRefForcePushed = "base_ref_force_pushed" // EventKindBaseRefForcePushed represents a base ref force push event.
 
-	// Review events.
-	EventKindReviewDismissed = "review_dismissed"
+	EventKindReviewDismissed = "review_dismissed" // EventKindReviewDismissed represents a review dismissed event.
 
-	// Duplicate events.
-	EventKindMarkedAsDuplicate   = "marked_as_duplicate"
-	EventKindUnmarkedAsDuplicate = "unmarked_as_duplicate"
+	EventKindMarkedAsDuplicate   = "marked_as_duplicate"   // EventKindMarkedAsDuplicate represents a marked as duplicate event.
+	EventKindUnmarkedAsDuplicate = "unmarked_as_duplicate" // EventKindUnmarkedAsDuplicate represents an unmarked as duplicate event.
 
-	// Lock events.
-	EventKindLocked   = "locked"
-	EventKindUnlocked = "unlocked"
+	EventKindLocked   = "locked"   // EventKindLocked represents a lock event.
+	EventKindUnlocked = "unlocked" // EventKindUnlocked represents an unlock event.
 
-	// Auto merge events.
-	EventKindAutoMergeEnabled  = "auto_merge_enabled"
-	EventKindAutoMergeDisabled = "auto_merge_disabled"
+	EventKindAutoMergeEnabled  = "auto_merge_enabled"  // EventKindAutoMergeEnabled represents an auto merge enabled event.
+	EventKindAutoMergeDisabled = "auto_merge_disabled" // EventKindAutoMergeDisabled represents an auto merge disabled event.
 
-	// Deploy events.
+	// EventKindDeploymentEnvironmentChanged represents a deployment environment change event.
 	EventKindDeploymentEnvironmentChanged = "deployment_environment_changed"
 
-	// Connected/Disconnected events.
-	EventKindConnected    = "connected"
-	EventKindDisconnected = "disconnected"
+	EventKindConnected    = "connected"    // EventKindConnected represents a connected event.
+	EventKindDisconnected = "disconnected" // EventKindDisconnected represents a disconnected event.
 
-	// Comment events.
-	EventKindCommentDeleted = "comment_deleted"
+	EventKindCommentDeleted = "comment_deleted" // EventKindCommentDeleted represents a comment deleted event.
 
-	// Check/Status events (not from timeline but from other APIs).
-	EventKindStatusCheck = "status_check"
-	EventKindCheckRun    = "check_run"
+	EventKindStatusCheck = "status_check" // EventKindStatusCheck represents a status check event (from APIs).
+	EventKindCheckRun    = "check_run"    // EventKindCheckRun represents a check run event (from APIs).
 )
 
 // WriteAccess constants for the Event.WriteAccess field.
