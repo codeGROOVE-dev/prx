@@ -28,6 +28,7 @@ const (
 func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	noCache := flag.Bool("no-cache", false, "Disable caching")
+	referenceTimeStr := flag.String("reference-time", "", "Reference time for cache validation (RFC3339 format, e.g., 2025-03-16T06:18:08Z)")
 	flag.Parse()
 
 	if *debug {
@@ -37,9 +38,20 @@ func main() {
 	}
 
 	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "Usage: %s [--debug] [--no-cache] <pull-request-url>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [--debug] [--no-cache] [--reference-time=TIME] <pull-request-url>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Example: %s https://github.com/golang/go/pull/12345\n", os.Args[0])
 		os.Exit(1)
+	}
+
+	// Parse reference time if provided
+	referenceTime := time.Now()
+	if *referenceTimeStr != "" {
+		var err error
+		referenceTime, err = time.Parse(time.RFC3339, *referenceTimeStr)
+		if err != nil {
+			log.Printf("Invalid reference time format (use RFC3339, e.g., 2025-03-16T06:18:08Z): %v", err)
+			os.Exit(1)
+		}
 	}
 
 	prURL := flag.Arg(0)
@@ -70,7 +82,7 @@ func main() {
 	}
 
 	client := prx.NewClient(token, opts...)
-	data, err := client.PullRequest(ctx, owner, repo, prNumber)
+	data, err := client.PullRequestWithReferenceTime(ctx, owner, repo, prNumber, referenceTime)
 	if err != nil {
 		log.Printf("Failed to fetch PR data: %v", err)
 		cancel()
