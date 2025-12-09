@@ -1,6 +1,6 @@
 github.com/codeGROOVE-dev/retry v1.3.0 h1:/+ipAWRJLL6y1R1vprYo0FSjSBvH6fE5j9LKXjpD54g=
 github.com/codeGROOVE-dev/retry v1.3.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
-github.com/codeGROOVE-dev/sfcache v1.3.0 h1:Ew900GWXkZhMEU560kz0Nk1HvhGshiqaIASbTH+ihHg=
-github.com/codeGROOVE-dev/sfcache v1.3.0/go.mod h1:ksV5Y1RwKmOPZZiV0zXpsBOENGUCgO0fVgr/P8f/DJM=
-github.com/codeGROOVE-dev/sfcache/pkg/persist/localfs v1.3.0 h1:7zKbd7aHVzmbK2eEbdsf6Dknrte/o8+7I6GkNob8bGA=
-github.com/codeGROOVE-dev/sfcache/pkg/persist/localfs v1.3.0/go.mod h1:vHDjjehmi+yjXD+DXVG0rnc4iOBsiIknLThqpkYwA/c=
+github.com/codeGROOVE-dev/sfcache v1.4.0 h1:F00PqIYuenn/t2uK72MJ2zUCrrhW8WC5xaV+C16VNE4=
+github.com/codeGROOVE-dev/sfcache v1.4.0/go.mod h1:ksV5Y1RwKmOPZZiV0zXpsBOENGUCgO0fVgr/P8f/DJM=
+github.com/codeGROOVE-dev/sfcache/pkg/store/localfs v1.4.0 h1:oyHwsawHd9kUFdAuXSCKYiEQTXuHAVd4y7cdBatjsLY=
+github.com/codeGROOVE-dev/sfcache/pkg/store/localfs v1.4.0/go.mod h1:D/Y1sYT1m3VXHZRkQjHjFwtKQOsb587QZP/GtfJEDSE=

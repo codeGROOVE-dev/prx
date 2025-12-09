@@ -149,7 +149,7 @@ func TestClient_PullRequestWithCache(t *testing.T) {
 
 	ctx := context.Background()
 	refTime := time.Now()
-	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 456, refTime)
+	prData, err := client.PullRequestWithReferenceTime(ctx, "testowner", "testrepo", 456, refTime)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestClient_PullRequestWithCache(t *testing.T) {
 	}
 
 	// Call again with same reference time to test cache hit path
-	prData2, err := client.PullRequest(ctx, "testowner", "testrepo", 456, refTime)
+	prData2, err := client.PullRequestWithReferenceTime(ctx, "testowner", "testrepo", 456, refTime)
 	if err != nil {
 		t.Fatalf("Expected no error on cached request, got: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/sfcache/pkg/store/localfs"
 )
 
 const (
@@ -22,6 +23,10 @@ const (
 	idleConnTimeoutSec  = 90
 )
 
+// PRStore is the interface for PR cache storage backends.
+// This is an alias for sfcache.Store with the appropriate type parameters.
+type PRStore = sfcache.Store[string, PullRequestData]
+
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
 	github interface {
@@ -30,9 +35,9 @@ type Client struct {
 		collaborators(ctx context.Context, owner, repo string) (map[string]string, error)
 	}
 	logger             *slog.Logger
-	token              string // Store token for recreating client with new transport
 	collaboratorsCache *sfcache.MemoryCache[string, map[string]string]
-	cacheDir           string // empty if caching is disabled
+	prCache            *sfcache.TieredCache[string, PullRequestData]
+	token              string // Store token for recreating client with new transport
 }
 
 // Option is a function that configures a Client.
@@ -58,15 +63,22 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
-// WithNoCache disables disk-based caching.
-func WithNoCache() Option {
+// WithCacheStore sets a custom cache store for PR data.
+// Use null.New[string, prx.PullRequestData]() to disable persistence.
+func WithCacheStore(store PRStore) Option {
 	return func(c *Client) {
-		c.cacheDir = ""
+		prCache, err := sfcache.NewTiered(store, sfcache.TTL(prCacheTTL))
+		if err != nil {
+			c.logger.Warn("failed to create cache from store, using default", "error", err)
+			return
+		}
+		c.prCache = prCache
 	}
 }
 
 // NewClient creates a new Client with the given GitHub token.
-// Caching is enabled by default - use WithNoCache() to disable.
+// Caching is enabled by default with disk persistence.
+// Use WithCacheStore to provide a custom store (including null.New() to disable persistence).
 // If token is empty, WithHTTPClient option must be provided.
 func NewClient(token string, opts ...Option) *Client {
 	transport := &http.Transport{
@@ -76,16 +88,9 @@ func NewClient(token string, opts ...Option) *Client {
 		DisableCompression:  false,
 		DisableKeepAlives:   false,
 	}
-	// Set up default cache directory
-	userCacheDir, err := os.UserCacheDir()
-	if err != nil {
-		userCacheDir = os.TempDir()
-	}
-	defaultCacheDir := filepath.Join(userCacheDir, "prx")
 	c := &Client{
 		logger:             slog.Default(),
 		token:              token,
-		cacheDir:           defaultCacheDir, // Enable caching by default
 		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
 		github: &githubClient{
 			client: &http.Client{
@@ -100,7 +105,36 @@ func NewClient(token string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+
+	// Set up default cache if none was configured via options
+	if c.prCache == nil {
+		c.prCache = createDefaultCache(c.logger)
+	}
+
 	return c
+}
+
+func createDefaultCache(log *slog.Logger) *sfcache.TieredCache[string, PullRequestData] {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "prx")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Warn("failed to create cache directory, caching disabled", "error", err)
+		return nil
+	}
+	store, err := localfs.New[string, PullRequestData]("prx-pr", dir)
+	if err != nil {
+		log.Warn("failed to create cache store, caching disabled", "error", err)
+		return nil
+	}
+	cache, err := sfcache.NewTiered(store, sfcache.TTL(prCacheTTL))
+	if err != nil {
+		log.Warn("failed to create cache, caching disabled", "error", err)
+		return nil
+	}
+	return cache
 }
 
 // PullRequest fetches a pull request with all its events and metadata.
@@ -112,22 +146,44 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, prNumber i
 func (c *Client) PullRequestWithReferenceTime(
 	ctx context.Context,
 	owner, repo string,
-	prNumber int,
-	referenceTime time.Time,
+	pr int,
+	refTime time.Time,
 ) (*PullRequestData, error) {
-	if c.cacheDir != "" {
-		cache, err := newCache(c.cacheDir, c.logger)
-		if err != nil {
-			c.logger.WarnContext(ctx, "failed to create cache, proceeding without caching", "error", err)
-			return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
-		}
-		defer func() {
-			if closeErr := cache.close(); closeErr != nil {
-				c.logger.WarnContext(ctx, "failed to close cache", "error", closeErr)
-			}
-		}()
-		cacheClient := &CacheClient{Client: c, cache: cache}
-		return cacheClient.PullRequestWithReferenceTime(ctx, owner, repo, prNumber, referenceTime)
+	if c.prCache == nil {
+		return c.pullRequestViaGraphQL(ctx, owner, repo, pr)
 	}
-	return c.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+
+	key := prCacheKey(owner, repo, pr)
+
+	if cached, found, err := c.prCache.Get(ctx, key); err != nil {
+		c.logger.WarnContext(ctx, "cache get error", "error", err)
+	} else if found {
+		if !cached.CachedAt.Before(refTime) {
+			c.logger.InfoContext(ctx, "cache hit: GraphQL pull request",
+				"owner", owner, "repo", repo, "pr", pr, "cached_at", cached.CachedAt)
+			return &cached, nil
+		}
+		c.logger.InfoContext(ctx, "cache miss: GraphQL pull request expired",
+			"owner", owner, "repo", repo, "pr", pr,
+			"cached_at", cached.CachedAt, "reference_time", refTime)
+		if err := c.prCache.Delete(ctx, key); err != nil {
+			c.logger.WarnContext(ctx, "failed to delete stale cache entry", "error", err)
+		}
+	} else {
+		c.logger.InfoContext(ctx, "cache miss: GraphQL pull request not in cache",
+			"owner", owner, "repo", repo, "pr", pr)
+	}
+
+	result, err := c.prCache.GetSet(ctx, key, func(ctx context.Context) (PullRequestData, error) {
+		data, err := c.pullRequestViaGraphQL(ctx, owner, repo, pr)
+		if err != nil {
+			return PullRequestData{}, err
+		}
+		data.CachedAt = time.Now()
+		return *data, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

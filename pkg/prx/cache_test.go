@@ -148,7 +148,7 @@ func TestCacheClient(t *testing.T) {
 
 	// First request - should hit the API
 	beforeFirstRequest := requestCount
-	events1, err := client.PullRequest(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
+	events1, err := client.PullRequestWithReferenceTime(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
 	if err != nil {
 		t.Fatalf("First request failed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestCacheClient(t *testing.T) {
 
 	// Second request with same reference time - should use cache for most endpoints
 	beforeSecondRequest := requestCount
-	events2, err := client.PullRequest(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
+	events2, err := client.PullRequestWithReferenceTime(ctx, "test", "repo", 1, time.Now().Add(-2*time.Hour))
 	if err != nil {
 		t.Fatalf("Second request failed: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestCacheClient(t *testing.T) {
 
 	// Third request with future reference time - should hit API again
 	beforeThirdRequest := requestCount
-	_, err = client.PullRequest(ctx, "test", "repo", 1, time.Now().Add(1*time.Hour))
+	_, err = client.PullRequestWithReferenceTime(ctx, "test", "repo", 1, time.Now().Add(1*time.Hour))
 	if err != nil {
 		t.Fatalf("Third request failed: %v", err)
 	}

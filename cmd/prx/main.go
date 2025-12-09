@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
+	"github.com/codeGROOVE-dev/sfcache/pkg/store/null"
 )
 
 const (
@@ -78,7 +79,7 @@ func main() {
 
 	// Configure client options
 	if *noCache {
-		opts = append(opts, prx.WithNoCache())
+		opts = append(opts, prx.WithCacheStore(null.New[string, prx.PullRequestData]()))
 	}
 
 	client := prx.NewClient(token, opts...)
