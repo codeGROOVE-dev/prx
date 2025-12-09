@@ -5,11 +5,17 @@ package prx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/codeGROOVE-dev/sfcache"
@@ -21,6 +27,10 @@ const (
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 10
 	idleConnTimeoutSec  = 90
+
+	// Cache TTL constants.
+	prCacheTTL            = 20 * 24 * time.Hour // 20 days
+	collaboratorsCacheTTL = 4 * time.Hour
 )
 
 // PRStore is the interface for PR cache storage backends.
@@ -186,4 +196,41 @@ func (c *Client) PullRequestWithReferenceTime(
 		return nil, err
 	}
 	return &result, nil
+}
+
+// Close releases cache resources.
+func (c *Client) Close() error {
+	if c.prCache != nil {
+		return c.prCache.Close()
+	}
+	return nil
+}
+
+// NewCacheStore creates a cache store backed by the given directory.
+// This is a convenience function for use with WithCacheStore.
+func NewCacheStore(dir string) (PRStore, error) {
+	dir = filepath.Clean(dir)
+	if !filepath.IsAbs(dir) {
+		return nil, errors.New("cache directory must be absolute path")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating cache directory: %w", err)
+	}
+	store, err := localfs.New[string, PullRequestData]("prx-pr", dir)
+	if err != nil {
+		return nil, fmt.Errorf("creating PR cache store: %w", err)
+	}
+	return store, nil
+}
+
+// prCacheKey generates a cache key for PR data.
+func prCacheKey(owner, repo string, prNumber int) string {
+	key := strings.Join([]string{"graphql", "pr_graphql", owner, repo, strconv.Itoa(prNumber)}, "/")
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:])
+}
+
+// collaboratorsCacheKey generates a cache key for collaborators data.
+func collaboratorsCacheKey(owner, repo string) string {
+	return fmt.Sprintf("%s/%s", owner, repo)
 }

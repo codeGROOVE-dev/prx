@@ -254,85 +254,13 @@ type githubUser struct {
 	Type  string `json:"type"`
 }
 
-// githubCommit represents a GitHub commit.
-type githubCommit struct {
-	Author struct {
-		Date time.Time `json:"date"`
-	} `json:"author"`
-	Message string `json:"message"`
-}
-
-// githubPullRequestCommit represents a commit in a pull request.
-type githubPullRequestCommit struct {
-	Author *githubUser  `json:"author"`
-	Commit githubCommit `json:"commit"`
-}
-
-// githubComment represents a GitHub comment.
-type githubComment struct {
-	User              *githubUser `json:"user"`
-	CreatedAt         time.Time   `json:"created_at"`
-	Body              string      `json:"body"`
-	AuthorAssociation string      `json:"author_association"`
-}
-
-// githubReview represents a GitHub review.
-type githubReview struct {
-	User              *githubUser `json:"user"`
-	SubmittedAt       time.Time   `json:"submitted_at"`
-	State             string      `json:"state"`
-	Body              string      `json:"body"`
-	AuthorAssociation string      `json:"author_association"`
-}
-
-// githubReviewComment represents a GitHub review comment.
-type githubReviewComment struct {
-	User              *githubUser `json:"user"`
-	CreatedAt         time.Time   `json:"created_at"`
-	Body              string      `json:"body"`
-	AuthorAssociation string      `json:"author_association"`
-}
-
-// githubTimelineEvent represents a GitHub timeline event.
-type githubTimelineEvent struct {
-	Event             string      `json:"event"`
-	Actor             *githubUser `json:"actor"`
-	CreatedAt         time.Time   `json:"created_at"`
-	AuthorAssociation string      `json:"author_association"`
-	Assignee          *githubUser `json:"assignee"`
-	Label             struct {
-		Name string `json:"name"`
-	} `json:"label"`
-	Milestone struct {
-		Title string `json:"title"`
-	} `json:"milestone"`
-	RequestedReviewer *githubUser `json:"requested_reviewer"`
-	RequestedTeam     struct {
-		Name string `json:"name"`
-	} `json:"requested_team"`
-}
-
-// githubStatus represents a GitHub status.
-type githubStatus struct {
-	Context     string      `json:"context"`     // The status check name
-	Description string      `json:"description"` // Optional description
-	Creator     *githubUser `json:"creator"`
-	CreatedAt   time.Time   `json:"created_at"`
-	State       string      `json:"state"`
-	TargetURL   string      `json:"target_url"`
-}
-
-// githubCheckRun represents a GitHub check run.
+// githubCheckRun represents a GitHub check run from the REST API.
 type githubCheckRun struct {
-	Name string `json:"name"`
-	App  struct {
-		Owner *githubUser `json:"owner"`
-	} `json:"app"`
+	Name        string    `json:"name"`
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`
 	Conclusion  string    `json:"conclusion"`
 	Status      string    `json:"status"`
-	HTMLURL     string    `json:"html_url"`
 	Output      struct {
 		Title   string `json:"title"`
 		Summary string `json:"summary"`
@@ -344,67 +272,7 @@ type githubCheckRuns struct {
 	CheckRuns []*githubCheckRun `json:"check_runs"`
 }
 
-// githubPullRequest represents a GitHub pull request.
-type githubPullRequest struct {
-	UpdatedAt time.Time   `json:"updated_at"`
-	ClosedAt  time.Time   `json:"closed_at"`
-	MergedAt  time.Time   `json:"merged_at"`
-	CreatedAt time.Time   `json:"created_at"`
-	MergedBy  *githubUser `json:"merged_by"`
-	User      *githubUser `json:"user"`
-	Mergeable *bool       `json:"mergeable"`
-	Head      struct {
-		SHA string `json:"sha"`
-		Ref string `json:"ref"`
-	} `json:"head"`
-	Body  string `json:"body"`
-	State string `json:"state"`
-	Title string `json:"title"`
-	Base  struct {
-		Ref string `json:"ref"`
-	} `json:"base"`
-	AuthorAssociation string `json:"author_association"`
-	MergeableState    string `json:"mergeable_state"`
-	Labels            []struct {
-		Name string `json:"name"`
-	} `json:"labels"`
-	Assignees          []*githubUser `json:"assignees"`
-	RequestedReviewers []*githubUser `json:"requested_reviewers"`
-	Deletions          int           `json:"deletions"`
-	Number             int           `json:"number"`
-	ChangedFiles       int           `json:"changed_files"`
-	Commits            int           `json:"commits"`
-	ReviewComments     int           `json:"review_comments"`
-	Comments           int           `json:"comments"`
-	Additions          int           `json:"additions"`
-	Draft              bool          `json:"draft"`
-	Merged             bool          `json:"merged"`
-}
-
-// githubBranchProtection represents branch protection settings.
-type githubBranchProtection struct {
-	RequiredStatusChecks       *githubRequiredStatusChecks `json:"required_status_checks"`
-	RequiredPullRequestReviews *struct {
-		RequiredApprovingReviewCount int `json:"required_approving_review_count"`
-	} `json:"required_pull_request_reviews"`
-	EnforceAdmins struct {
-		Enabled bool `json:"enabled"`
-	} `json:"enforce_admins"`
-}
-
-// githubRequiredStatusChecks represents required status checks from branch protection.
-type githubRequiredStatusChecks struct {
-	URL         string   `json:"url"`
-	ContextsURL string   `json:"contexts_url"`
-	Contexts    []string `json:"contexts"`
-	Checks      []struct {
-		AppID   *int   `json:"app_id"`
-		Context string `json:"context"`
-	} `json:"checks"`
-	Strict bool `json:"strict"`
-}
-
-// githubRuleset represents a repository ruleset.
+// githubRuleset represents a repository ruleset from the REST API.
 type githubRuleset struct {
 	Name   string `json:"name"`
 	Target string `json:"target"`
@@ -416,17 +284,4 @@ type githubRuleset struct {
 			} `json:"required_status_checks"`
 		} `json:"parameters"`
 	} `json:"rules"`
-	ID int `json:"id"`
-}
-
-// githubCombinedStatus represents the combined status for a commit.
-type githubCombinedStatus struct {
-	State    string `json:"state"`
-	Statuses []struct {
-		Context     string `json:"context"`
-		State       string `json:"state"`
-		Description string `json:"description"`
-		Required    bool   `json:"required,omitempty"`
-	} `json:"statuses"`
-	TotalCount int `json:"total_count"`
 }

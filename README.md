@@ -213,24 +213,30 @@ The library fetches the following event kinds:
 - **Bot detection** (marks events from bots with `"bot": true`)
 - **Mention extraction** (populated in `targets` field for comments/reviews)
 - **Question detection** (marks comments containing questions)
-- **Caching support** via `prx.NewCacheClient()` for reduced API calls
+- **Caching support** via `prx.WithCacheStore()` for reduced API calls
 - **Structured logging** with slog
 - **Retry logic** with exponential backoff for API reliability
 
 ## Caching
 
-For applications that need to fetch the same PR data repeatedly:
+Caching is enabled by default with disk persistence to the user cache directory.
+
+For custom cache directories:
 
 ```go
-// Create a caching client
-cacheDir := "/tmp/prx-cache"
-client, err := prx.NewCacheClient(token, cacheDir)
-
-// Fetch with caching (uses updated_at timestamp for cache invalidation)
-data, err := client.PullRequest(ctx, "owner", "repo", 123, time.Now())
+store, err := prx.NewCacheStore("/tmp/prx-cache")
+client := prx.NewClient(token, prx.WithCacheStore(store))
 ```
 
-Cache files are automatically cleaned up after 20 days.
+To disable caching persistence (memory-only):
+
+```go
+import "github.com/codeGROOVE-dev/sfcache/pkg/store/null"
+
+client := prx.NewClient(token, prx.WithCacheStore(null.New[string, prx.PullRequestData]()))
+```
+
+Cache entries expire after 20 days.
 
 ## Authentication
 

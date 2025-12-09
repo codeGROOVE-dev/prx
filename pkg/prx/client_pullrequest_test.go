@@ -135,10 +135,11 @@ func TestClient_PullRequestWithCache(t *testing.T) {
 	defer server.Close()
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
-	client, err := NewCacheClient("test-token", tmpDir, WithHTTPClient(httpClient))
+	store, err := NewCacheStore(tmpDir)
 	if err != nil {
-		t.Fatalf("Failed to create cache client: %v", err)
+		t.Fatalf("Failed to create cache store: %v", err)
 	}
+	client := NewClient("test-token", WithCacheStore(store), WithHTTPClient(httpClient))
 
 	// Override the API URL
 	client.github = &githubClient{

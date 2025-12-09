@@ -2,7 +2,6 @@ package prx
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,62 +14,12 @@ func TestCacheClient(t *testing.T) {
 	// Create temporary cache directory
 	cacheDir := t.TempDir()
 
-	// Create test server
+	// Create test server that handles GraphQL and REST endpoints
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 
 		switch r.URL.Path {
-		case "/repos/test/repo/pulls/1":
-			pr := githubPullRequest{
-				Number:    1,
-				Title:     "Test PR",
-				Body:      "Test body",
-				CreatedAt: time.Now().Add(-24 * time.Hour),
-				UpdatedAt: time.Now().Add(-2 * time.Hour),
-				User:      &githubUser{Login: "testuser"},
-				State:     "closed",
-				ClosedAt:  time.Now().Add(-1 * time.Hour),
-			}
-			pr.Head.SHA = "abc123"
-			if err := json.NewEncoder(w).Encode(pr); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		case "/repos/test/repo/pulls/1/commits":
-			commit := &githubPullRequestCommit{
-				Author: &githubUser{Login: "testuser"},
-			}
-			commit.Commit.Author.Date = time.Now().Add(-12 * time.Hour)
-			commit.Commit.Message = "Test commit"
-			if err := json.NewEncoder(w).Encode([]*githubPullRequestCommit{commit}); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		case "/repos/test/repo/commits/abc123/status":
-			// Combined status endpoint - return empty response
-			if _, err := w.Write([]byte(`{"state": "success", "statuses": []}`)); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		case "/repos/test/repo/branches//protection":
-			// Branch protection endpoint - return empty protection
-			if _, err := w.Write([]byte(`{}`)); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		case "/repos/test/repo/branches//protection/required_status_checks":
-			// Required status checks endpoint - return no required checks
-			if _, err := w.Write([]byte(`{}`)); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		case "/repos/test/repo/rulesets":
-			// Rulesets endpoint - return empty rulesets
-			if _, err := w.Write([]byte(`[]`)); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
 		case "/graphql":
 			// GraphQL endpoint - return a minimal PR response
 			response := `{"data": {"repository": {"pullRequest": {
@@ -107,8 +56,13 @@ func TestCacheClient(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+		case "/repos/test/repo/rulesets":
+			if _, err := w.Write([]byte(`[]`)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		default:
-			// Check runs endpoint expects a different format
+			// Check runs endpoint
 			if r.URL.Path == "/repos/test/repo/commits/abc123/check-runs" {
 				if _, err := w.Write([]byte(`{"check_runs": []}`)); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -125,14 +79,16 @@ func TestCacheClient(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create cache client with test server
-	client, err := NewCacheClient("test-token", cacheDir,
+	// Create cache store and client with test server
+	store, err := NewCacheStore(cacheDir)
+	if err != nil {
+		t.Fatalf("Failed to create cache store: %v", err)
+	}
+	client := NewClient("test-token",
+		WithCacheStore(store),
 		WithHTTPClient(&http.Client{Transport: &http.Transport{}}),
 		WithLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))),
 	)
-	if err != nil {
-		t.Fatalf("Failed to create cache client: %v", err)
-	}
 	defer func() {
 		if closeErr := client.Close(); closeErr != nil {
 			t.Errorf("Failed to close client: %v", closeErr)

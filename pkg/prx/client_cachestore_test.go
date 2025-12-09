@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestNewCacheClient(t *testing.T) {
+func TestNewCacheStore(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	tests := []struct {
@@ -27,7 +27,7 @@ func TestNewCacheClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, err := NewCacheClient("test-token", tt.dir)
+			store, err := NewCacheStore(tt.dir)
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("Expected error but got none")
@@ -36,14 +36,9 @@ func TestNewCacheClient(t *testing.T) {
 				if err != nil {
 					t.Errorf("Unexpected error: %v", err)
 				}
-				if client == nil {
-					t.Errorf("Expected client but got nil")
+				if store == nil {
+					t.Errorf("Expected store but got nil")
 				}
-				defer func() {
-					if closeErr := client.Close(); closeErr != nil {
-						t.Errorf("Failed to close client: %v", closeErr)
-					}
-				}()
 			}
 		})
 	}
@@ -109,12 +104,13 @@ func TestCollaboratorsCacheKey(t *testing.T) {
 	}
 }
 
-func TestCacheClientClose(t *testing.T) {
+func TestClientClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	client, err := NewCacheClient("test-token", tmpDir)
+	store, err := NewCacheStore(tmpDir)
 	if err != nil {
-		t.Fatalf("Failed to create cache client: %v", err)
+		t.Fatalf("Failed to create cache store: %v", err)
 	}
+	client := NewClient("test-token", WithCacheStore(store))
 
 	// Close should not error
 	if err := client.Close(); err != nil {
