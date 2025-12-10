@@ -4,6 +4,66 @@ import (
 	"time"
 )
 
+// Event kind constants for PR timeline events.
+const (
+	EventKindCommit        = "commit"         // EventKindCommit represents a commit event.
+	EventKindComment       = "comment"        // EventKindComment represents a comment event.
+	EventKindReview        = "review"         // EventKindReview represents a review event.
+	EventKindReviewComment = "review_comment" // EventKindReviewComment represents a review comment event.
+
+	EventKindLabeled   = "labeled"   // EventKindLabeled represents a label added event.
+	EventKindUnlabeled = "unlabeled" // EventKindUnlabeled represents a label removed event.
+
+	EventKindAssigned   = "assigned"   // EventKindAssigned represents an assignment event.
+	EventKindUnassigned = "unassigned" // EventKindUnassigned represents an unassignment event.
+
+	EventKindMilestoned   = "milestoned"   // EventKindMilestoned represents a milestone added event.
+	EventKindDemilestoned = "demilestoned" // EventKindDemilestoned represents a milestone removed event.
+
+	EventKindReviewRequested      = "review_requested"       // EventKindReviewRequested represents a review request event.
+	EventKindReviewRequestRemoved = "review_request_removed" // EventKindReviewRequestRemoved represents a review request removed event.
+
+	EventKindPRMerged       = "pr_merged"        // EventKindPRMerged represents a PR merge event.
+	EventKindReadyForReview = "ready_for_review" // EventKindReadyForReview represents a ready for review event.
+	EventKindConvertToDraft = "convert_to_draft" // EventKindConvertToDraft represents a convert to draft event.
+	EventKindClosed         = "closed"           // EventKindClosed represents a PR closed event.
+	EventKindReopened       = "reopened"         // EventKindReopened represents a PR reopened event.
+
+	EventKindMentioned  = "mentioned"  // EventKindMentioned represents a mention event.
+	EventKindReferenced = "referenced" // EventKindReferenced represents a reference event.
+
+	EventKindPinned      = "pinned"      // EventKindPinned represents a pin event.
+	EventKindUnpinned    = "unpinned"    // EventKindUnpinned represents an unpin event.
+	EventKindTransferred = "transferred" // EventKindTransferred represents a transfer event.
+
+	EventKindSubscribed   = "subscribed"   // EventKindSubscribed represents a subscription event.
+	EventKindUnsubscribed = "unsubscribed" // EventKindUnsubscribed represents an unsubscription event.
+
+	EventKindHeadRefDeleted     = "head_ref_deleted"      // EventKindHeadRefDeleted represents a head ref deletion event.
+	EventKindHeadRefRestored    = "head_ref_restored"     // EventKindHeadRefRestored represents a head ref restoration event.
+	EventKindHeadRefForcePushed = "head_ref_force_pushed" // EventKindHeadRefForcePushed represents a head ref force push event.
+
+	EventKindBaseRefChanged     = "base_ref_changed"      // EventKindBaseRefChanged represents a base ref change event.
+	EventKindBaseRefForcePushed = "base_ref_force_pushed" // EventKindBaseRefForcePushed represents a base ref force push event.
+
+	EventKindReviewDismissed = "review_dismissed" // EventKindReviewDismissed represents a review dismissed event.
+
+	EventKindLocked   = "locked"   // EventKindLocked represents a lock event.
+	EventKindUnlocked = "unlocked" // EventKindUnlocked represents an unlock event.
+
+	EventKindAutoMergeEnabled  = "auto_merge_enabled"  // EventKindAutoMergeEnabled represents an auto merge enabled event.
+	EventKindAutoMergeDisabled = "auto_merge_disabled" // EventKindAutoMergeDisabled represents an auto merge disabled event.
+
+	// EventKindDeploymentEnvironmentChanged represents a deployment environment change event.
+	EventKindDeploymentEnvironmentChanged = "deployment_environment_changed"
+
+	EventKindConnected    = "connected"    // EventKindConnected represents a connected event.
+	EventKindDisconnected = "disconnected" // EventKindDisconnected represents a disconnected event.
+
+	EventKindStatusCheck = "status_check" // EventKindStatusCheck represents a status check event (from APIs).
+	EventKindCheckRun    = "check_run"    // EventKindCheckRun represents a check run event (from APIs).
+)
+
 // WriteAccess constants for the Event.WriteAccess field.
 const (
 	WriteAccessNo         = -2 // User confirmed to not have write access

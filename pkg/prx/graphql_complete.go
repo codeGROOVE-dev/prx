@@ -211,7 +211,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 
 	for _, node := range data.Commits.Nodes {
 		event := Event{
-			Kind:        "commit",
+			Kind:        EventKindCommit,
 			Timestamp:   node.Commit.CommittedDate,
 			Body:        node.Commit.OID,
 			Description: truncate(node.Commit.Message),
@@ -235,7 +235,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 			timestamp = *review.SubmittedAt
 		}
 		event := Event{
-			Kind:        "review",
+			Kind:        EventKindReview,
 			Timestamp:   timestamp,
 			Actor:       review.Author.Login,
 			Body:        truncate(review.Body),
@@ -252,7 +252,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 		for j := range thread.Comments.Nodes {
 			comment := &thread.Comments.Nodes[j]
 			event := Event{
-				Kind:        "review_comment",
+				Kind:        EventKindReviewComment,
 				Timestamp:   comment.CreatedAt,
 				Actor:       comment.Author.Login,
 				Body:        truncate(comment.Body),
@@ -267,7 +267,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 
 	for _, comment := range data.Comments.Nodes {
 		event := Event{
-			Kind:        "comment",
+			Kind:        EventKindComment,
 			Timestamp:   comment.CreatedAt,
 			Actor:       comment.Author.Login,
 			Body:        truncate(comment.Body),
@@ -297,7 +297,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 
 				if node.StartedAt != nil {
 					events = append(events, Event{
-						Kind:        "check_run",
+						Kind:        EventKindCheckRun,
 						Timestamp:   *node.StartedAt,
 						Body:        node.Name,
 						Outcome:     strings.ToLower(node.Status),
@@ -308,7 +308,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 
 				if node.CompletedAt != nil {
 					events = append(events, Event{
-						Kind:        "check_run",
+						Kind:        EventKindCheckRun,
 						Timestamp:   *node.CompletedAt,
 						Body:        node.Name,
 						Outcome:     strings.ToLower(node.Conclusion),
@@ -322,7 +322,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 					continue
 				}
 				event := Event{
-					Kind:        "status_check",
+					Kind:        EventKindStatusCheck,
 					Timestamp:   *node.CreatedAt,
 					Outcome:     strings.ToLower(node.State),
 					Body:        node.Context,
@@ -354,7 +354,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 		}
 		if data.MergedBy != nil {
 			event.Actor = data.MergedBy.Login
-			event.Kind = "pr_merged"
+			event.Kind = EventKindPRMerged
 			event.Bot = isBot(*data.MergedBy)
 		}
 		events = append(events, event)
@@ -420,7 +420,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 
 	switch typename {
 	case "AssignedEvent":
-		event.Kind = "assigned"
+		event.Kind = EventKindAssigned
 		if assignee, ok := item["assignee"].(map[string]any); ok {
 			if login, ok := assignee["login"].(string); ok {
 				event.Target = login
@@ -428,7 +428,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "UnassignedEvent":
-		event.Kind = "unassigned"
+		event.Kind = EventKindUnassigned
 		if assignee, ok := item["assignee"].(map[string]any); ok {
 			if login, ok := assignee["login"].(string); ok {
 				event.Target = login
@@ -436,7 +436,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "LabeledEvent":
-		event.Kind = "labeled"
+		event.Kind = EventKindLabeled
 		if label, ok := item["label"].(map[string]any); ok {
 			if name, ok := label["name"].(string); ok {
 				event.Target = name
@@ -444,7 +444,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "UnlabeledEvent":
-		event.Kind = "unlabeled"
+		event.Kind = EventKindUnlabeled
 		if label, ok := item["label"].(map[string]any); ok {
 			if name, ok := label["name"].(string); ok {
 				event.Target = name
@@ -452,19 +452,19 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "MilestonedEvent":
-		event.Kind = "milestoned"
+		event.Kind = EventKindMilestoned
 		if title, ok := item["milestoneTitle"].(string); ok {
 			event.Target = title
 		}
 
 	case "DemilestonedEvent":
-		event.Kind = "demilestoned"
+		event.Kind = EventKindDemilestoned
 		if title, ok := item["milestoneTitle"].(string); ok {
 			event.Target = title
 		}
 
 	case "ReviewRequestedEvent":
-		event.Kind = "review_requested"
+		event.Kind = EventKindReviewRequested
 		if reviewer, ok := item["requestedReviewer"].(map[string]any); ok {
 			if login, ok := reviewer["login"].(string); ok {
 				event.Target = login
@@ -474,7 +474,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "ReviewRequestRemovedEvent":
-		event.Kind = "review_request_removed"
+		event.Kind = EventKindReviewRequestRemoved
 		if reviewer, ok := item["requestedReviewer"].(map[string]any); ok {
 			if login, ok := reviewer["login"].(string); ok {
 				event.Target = login
@@ -484,50 +484,50 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "MentionedEvent":
-		event.Kind = "mentioned"
+		event.Kind = EventKindMentioned
 		event.Body = "User was mentioned"
 
 	case "ReadyForReviewEvent":
-		event.Kind = "ready_for_review"
+		event.Kind = EventKindReadyForReview
 
 	case "ConvertToDraftEvent":
-		event.Kind = "convert_to_draft"
+		event.Kind = EventKindConvertToDraft
 
 	case "ClosedEvent":
-		event.Kind = "closed"
+		event.Kind = EventKindClosed
 
 	case "ReopenedEvent":
-		event.Kind = "reopened"
+		event.Kind = EventKindReopened
 
 	case "MergedEvent":
 		event.Kind = "merged"
 
 	case "AutoMergeEnabledEvent":
-		event.Kind = "auto_merge_enabled"
+		event.Kind = EventKindAutoMergeEnabled
 
 	case "AutoMergeDisabledEvent":
-		event.Kind = "auto_merge_disabled"
+		event.Kind = EventKindAutoMergeDisabled
 
 	case "ReviewDismissedEvent":
-		event.Kind = "review_dismissed"
+		event.Kind = EventKindReviewDismissed
 		if msg, ok := item["dismissalMessage"].(string); ok {
 			event.Body = msg
 		}
 
 	case "BaseRefChangedEvent":
-		event.Kind = "base_ref_changed"
+		event.Kind = EventKindBaseRefChanged
 
 	case "BaseRefForcePushedEvent":
-		event.Kind = "base_ref_force_pushed"
+		event.Kind = EventKindBaseRefForcePushed
 
 	case "HeadRefForcePushedEvent":
-		event.Kind = "head_ref_force_pushed"
+		event.Kind = EventKindHeadRefForcePushed
 
 	case "HeadRefDeletedEvent":
-		event.Kind = "head_ref_deleted"
+		event.Kind = EventKindHeadRefDeleted
 
 	case "HeadRefRestoredEvent":
-		event.Kind = "head_ref_restored"
+		event.Kind = EventKindHeadRefRestored
 
 	case "RenamedTitleEvent":
 		event.Kind = "renamed_title"
@@ -538,10 +538,10 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		}
 
 	case "LockedEvent":
-		event.Kind = "locked"
+		event.Kind = EventKindLocked
 
 	case "UnlockedEvent":
-		event.Kind = "unlocked"
+		event.Kind = EventKindUnlocked
 
 	case "AddedToMergeQueueEvent":
 		event.Kind = "added_to_merge_queue"
@@ -556,37 +556,37 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = "automatic_base_change_failed"
 
 	case "ConnectedEvent":
-		event.Kind = "connected"
+		event.Kind = EventKindConnected
 
 	case "DisconnectedEvent":
-		event.Kind = "disconnected"
+		event.Kind = EventKindDisconnected
 
 	case "CrossReferencedEvent":
 		event.Kind = "cross_referenced"
 
 	case "ReferencedEvent":
-		event.Kind = "referenced"
+		event.Kind = EventKindReferenced
 
 	case "SubscribedEvent":
-		event.Kind = "subscribed"
+		event.Kind = EventKindSubscribed
 
 	case "UnsubscribedEvent":
-		event.Kind = "unsubscribed"
+		event.Kind = EventKindUnsubscribed
 
 	case "DeployedEvent":
 		event.Kind = "deployed"
 
 	case "DeploymentEnvironmentChangedEvent":
-		event.Kind = "deployment_environment_changed"
+		event.Kind = EventKindDeploymentEnvironmentChanged
 
 	case "PinnedEvent":
-		event.Kind = "pinned"
+		event.Kind = EventKindPinned
 
 	case "UnpinnedEvent":
-		event.Kind = "unpinned"
+		event.Kind = EventKindUnpinned
 
 	case "TransferredEvent":
-		event.Kind = "transferred"
+		event.Kind = EventKindTransferred
 
 	case "UserBlockedEvent":
 		event.Kind = "user_blocked"

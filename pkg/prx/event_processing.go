@@ -12,7 +12,7 @@ func filterEvents(events []Event) []Event {
 	for i := range events {
 		e := &events[i]
 		// Include all non-status_check events
-		if e.Kind != "status_check" {
+		if e.Kind != EventKindStatusCheck {
 			filtered = append(filtered, *e)
 			continue
 		}
@@ -36,7 +36,8 @@ func upgradeWriteAccess(events []Event) {
 	for i := range events {
 		e := &events[i]
 		switch e.Kind {
-		case "pr_merged", "labeled", "unlabeled", "assigned", "unassigned", "milestoned", "demilestoned":
+		case EventKindPRMerged, EventKindLabeled, EventKindUnlabeled,
+			EventKindAssigned, EventKindUnassigned, EventKindMilestoned, EventKindDemilestoned:
 			// These actions require write access to the repository
 			if e.Actor != "" {
 				confirmed[e.Actor] = true
@@ -80,7 +81,7 @@ func calculateCheckSummary(events []Event, requiredChecks []string) *CheckSummar
 	// Events should be sorted chronologically, but we explicitly track timestamps to be safe
 	for i := range events {
 		e := &events[i]
-		if (e.Kind == "status_check" || e.Kind == "check_run") && e.Body != "" {
+		if (e.Kind == EventKindStatusCheck || e.Kind == EventKindCheckRun) && e.Body != "" {
 			existing, exists := latestChecks[e.Body]
 			// Update if:
 			// 1. First occurrence (!exists)
@@ -151,7 +152,7 @@ func calculateApprovalSummary(events []Event) *ApprovalSummary {
 
 	for i := range events {
 		e := &events[i]
-		if e.Kind == "review" && e.Outcome != "" {
+		if e.Kind == EventKindReview && e.Outcome != "" {
 			latestReviews[e.Actor] = *e
 		}
 	}

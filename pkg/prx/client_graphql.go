@@ -142,7 +142,7 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 		}
 
 		event := Event{
-			Kind:      "check_run",
+			Kind:      EventKindCheckRun,
 			Timestamp: timestamp,
 			Actor:     "github",
 			Bot:       true,
@@ -184,7 +184,7 @@ func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, 
 	// Add all other commit SHAs from commit events
 	for i := range prData.Events {
 		e := &prData.Events[i]
-		if e.Kind == "commit" && e.Body != "" {
+		if e.Kind == EventKindCommit && e.Body != "" {
 			shas[e.Body] = true
 		}
 	}
@@ -222,7 +222,7 @@ func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 	// Extract from existing events that are marked as required
 	for i := range prData.Events {
 		e := &prData.Events[i]
-		if e.Required && (e.Kind == "check_run" || e.Kind == "status_check") {
+		if e.Required && (e.Kind == EventKindCheckRun || e.Kind == EventKindStatusCheck) {
 			required = append(required, e.Body)
 		}
 	}
