@@ -201,7 +201,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 	var events []Event
 
 	events = append(events, Event{
-		Kind:        "pr_opened",
+		Kind:        EventKindPROpened,
 		Timestamp:   data.CreatedAt,
 		Actor:       data.Author.Login,
 		Body:        truncate(data.Body),
@@ -349,7 +349,7 @@ func (c *Client) convertGraphQLToEventsComplete(ctx context.Context, data *graph
 
 	if data.ClosedAt != nil && !data.IsDraft {
 		event := Event{
-			Kind:      "pr_closed",
+			Kind:      EventKindPRClosed,
 			Timestamp: *data.ClosedAt,
 		}
 		if data.MergedBy != nil {
@@ -500,7 +500,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = EventKindReopened
 
 	case "MergedEvent":
-		event.Kind = "merged"
+		event.Kind = EventKindMerged
 
 	case "AutoMergeEnabledEvent":
 		event.Kind = EventKindAutoMergeEnabled
@@ -530,7 +530,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = EventKindHeadRefRestored
 
 	case "RenamedTitleEvent":
-		event.Kind = "renamed_title"
+		event.Kind = EventKindRenamedTitle
 		if prev, ok := item["previousTitle"].(string); ok {
 			if curr, ok := item["currentTitle"].(string); ok {
 				event.Body = fmt.Sprintf("Renamed from %q to %q", prev, curr)
@@ -544,16 +544,16 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = EventKindUnlocked
 
 	case "AddedToMergeQueueEvent":
-		event.Kind = "added_to_merge_queue"
+		event.Kind = EventKindAddedToMergeQueue
 
 	case "RemovedFromMergeQueueEvent":
-		event.Kind = "removed_from_merge_queue"
+		event.Kind = EventKindRemovedFromMergeQueue
 
 	case "AutomaticBaseChangeSucceededEvent":
-		event.Kind = "automatic_base_change_succeeded"
+		event.Kind = EventKindAutomaticBaseChangeSucceeded
 
 	case "AutomaticBaseChangeFailedEvent":
-		event.Kind = "automatic_base_change_failed"
+		event.Kind = EventKindAutomaticBaseChangeFailed
 
 	case "ConnectedEvent":
 		event.Kind = EventKindConnected
@@ -562,7 +562,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = EventKindDisconnected
 
 	case "CrossReferencedEvent":
-		event.Kind = "cross_referenced"
+		event.Kind = EventKindCrossReferenced
 
 	case "ReferencedEvent":
 		event.Kind = EventKindReferenced
@@ -574,7 +574,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = EventKindUnsubscribed
 
 	case "DeployedEvent":
-		event.Kind = "deployed"
+		event.Kind = EventKindDeployed
 
 	case "DeploymentEnvironmentChangedEvent":
 		event.Kind = EventKindDeploymentEnvironmentChanged
@@ -589,7 +589,7 @@ func (*Client) parseGraphQLTimelineEvent(_ context.Context, item map[string]any,
 		event.Kind = EventKindTransferred
 
 	case "UserBlockedEvent":
-		event.Kind = "user_blocked"
+		event.Kind = EventKindUserBlocked
 
 	default:
 		return nil
@@ -618,9 +618,7 @@ func (c *Client) writeAccessFromAssociation(ctx context.Context, owner, repo, us
 
 // checkCollaboratorPermission checks if a user has write access.
 func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, user string) int {
-	cacheKey := collaboratorsCacheKey(owner, repo)
-
-	collabs, err := c.collaboratorsCache.GetSet(cacheKey, func() (map[string]string, error) {
+	collabs, err := c.collaboratorsCache.GetSet(collaboratorsCacheKey(owner, repo), func() (map[string]string, error) {
 		result, fetchErr := c.github.Collaborators(ctx, owner, repo)
 		if fetchErr != nil {
 			c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",
@@ -652,23 +650,23 @@ func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, u
 
 // extractRequiredChecksFromGraphQL gets required checks from GraphQL response.
 func (*Client) extractRequiredChecksFromGraphQL(data *graphQLPullRequestComplete) []string {
-	checkMap := make(map[string]bool)
+	seen := make(map[string]bool)
 
 	if data.BaseRef.RefUpdateRule != nil {
-		for _, check := range data.BaseRef.RefUpdateRule.RequiredStatusCheckContexts {
-			checkMap[check] = true
+		for _, c := range data.BaseRef.RefUpdateRule.RequiredStatusCheckContexts {
+			seen[c] = true
 		}
 	}
 
 	if data.BaseRef.BranchProtectionRule != nil {
-		for _, check := range data.BaseRef.BranchProtectionRule.RequiredStatusCheckContexts {
-			checkMap[check] = true
+		for _, c := range data.BaseRef.BranchProtectionRule.RequiredStatusCheckContexts {
+			seen[c] = true
 		}
 	}
 
-	var checks []string
-	for check := range checkMap {
-		checks = append(checks, check)
+	checks := make([]string, 0, len(seen))
+	for c := range seen {
+		checks = append(checks, c)
 	}
 	return checks
 }

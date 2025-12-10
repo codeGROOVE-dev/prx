@@ -23,14 +23,19 @@ const (
 	EventKindReviewRequested      = "review_requested"       // EventKindReviewRequested represents a review request event.
 	EventKindReviewRequestRemoved = "review_request_removed" // EventKindReviewRequestRemoved represents a review request removed event.
 
+	EventKindPROpened       = "pr_opened"        // EventKindPROpened represents a PR opened event.
+	EventKindPRClosed       = "pr_closed"        // EventKindPRClosed represents a PR closed event.
 	EventKindPRMerged       = "pr_merged"        // EventKindPRMerged represents a PR merge event.
+	EventKindMerged         = "merged"           // EventKindMerged represents a merge event from timeline.
 	EventKindReadyForReview = "ready_for_review" // EventKindReadyForReview represents a ready for review event.
 	EventKindConvertToDraft = "convert_to_draft" // EventKindConvertToDraft represents a convert to draft event.
 	EventKindClosed         = "closed"           // EventKindClosed represents a PR closed event.
 	EventKindReopened       = "reopened"         // EventKindReopened represents a PR reopened event.
+	EventKindRenamedTitle   = "renamed_title"    // EventKindRenamedTitle represents a title rename event.
 
-	EventKindMentioned  = "mentioned"  // EventKindMentioned represents a mention event.
-	EventKindReferenced = "referenced" // EventKindReferenced represents a reference event.
+	EventKindMentioned       = "mentioned"        // EventKindMentioned represents a mention event.
+	EventKindReferenced      = "referenced"       // EventKindReferenced represents a reference event.
+	EventKindCrossReferenced = "cross_referenced" // EventKindCrossReferenced represents a cross-reference event.
 
 	EventKindPinned      = "pinned"      // EventKindPinned represents a pin event.
 	EventKindUnpinned    = "unpinned"    // EventKindUnpinned represents an unpin event.
@@ -51,14 +56,23 @@ const (
 	EventKindLocked   = "locked"   // EventKindLocked represents a lock event.
 	EventKindUnlocked = "unlocked" // EventKindUnlocked represents an unlock event.
 
-	EventKindAutoMergeEnabled  = "auto_merge_enabled"  // EventKindAutoMergeEnabled represents an auto merge enabled event.
-	EventKindAutoMergeDisabled = "auto_merge_disabled" // EventKindAutoMergeDisabled represents an auto merge disabled event.
+	EventKindAutoMergeEnabled      = "auto_merge_enabled"       // EventKindAutoMergeEnabled represents an auto merge enabled event.
+	EventKindAutoMergeDisabled     = "auto_merge_disabled"      // EventKindAutoMergeDisabled represents an auto merge disabled event.
+	EventKindAddedToMergeQueue     = "added_to_merge_queue"     // EventKindAddedToMergeQueue represents an added to merge queue event.
+	EventKindRemovedFromMergeQueue = "removed_from_merge_queue" // EventKindRemovedFromMergeQueue represents removal from merge queue.
 
+	// EventKindAutomaticBaseChangeSucceeded represents a successful base change.
+	EventKindAutomaticBaseChangeSucceeded = "automatic_base_change_succeeded"
+	// EventKindAutomaticBaseChangeFailed represents a failed base change.
+	EventKindAutomaticBaseChangeFailed = "automatic_base_change_failed"
+
+	EventKindDeployed = "deployed" // EventKindDeployed represents a deployment event.
 	// EventKindDeploymentEnvironmentChanged represents a deployment environment change event.
 	EventKindDeploymentEnvironmentChanged = "deployment_environment_changed"
 
 	EventKindConnected    = "connected"    // EventKindConnected represents a connected event.
 	EventKindDisconnected = "disconnected" // EventKindDisconnected represents a disconnected event.
+	EventKindUserBlocked  = "user_blocked" // EventKindUserBlocked represents a user blocked event.
 
 	EventKindStatusCheck = "status_check" // EventKindStatusCheck represents a status check event (from APIs).
 	EventKindCheckRun    = "check_run"    // EventKindCheckRun represents a check run event (from APIs).
