@@ -1,5 +1,5 @@
 //nolint:errcheck // Test handlers don't need to check w.Write errors
-package prx
+package github
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestGithubClient_DoRequest(t *testing.T) {
+func TestClient_Do(t *testing.T) {
 	tests := []struct {
 		name           string
 		path           string
@@ -73,19 +73,19 @@ func TestGithubClient_DoRequest(t *testing.T) {
 			server := httptest.NewServer(tt.serverHandler)
 			defer server.Close()
 
-			client := &githubClient{
-				client: server.Client(),
-				token:  "test-token",
-				api:    server.URL,
+			client := &Client{
+				HTTPClient: server.Client(),
+				Token:      "test-token",
+				BaseURL:    server.URL,
 			}
 
-			data, resp, err := client.doRequest(context.Background(), tt.path)
+			data, resp, err := client.Do(context.Background(), tt.path)
 
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("Expected error but got none")
 				}
-				var apiErr *GitHubAPIError
+				var apiErr *Error
 				if errors.As(err, &apiErr) {
 					if apiErr.StatusCode != tt.wantStatusCode {
 						t.Errorf("Expected status code %d, got %d", tt.wantStatusCode, apiErr.StatusCode)
@@ -106,21 +106,21 @@ func TestGithubClient_DoRequest(t *testing.T) {
 	}
 }
 
-func TestGithubClient_Get(t *testing.T) {
+func TestClient_Get(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"login": "testuser", "type": "User"}`))
 	}))
 	defer server.Close()
 
-	client := &githubClient{
-		client: server.Client(),
-		token:  "test-token",
-		api:    server.URL,
+	client := &Client{
+		HTTPClient: server.Client(),
+		Token:      "test-token",
+		BaseURL:    server.URL,
 	}
 
-	var user githubUser
-	resp, err := client.get(context.Background(), "/users/testuser", &user)
+	var user User
+	resp, err := client.Get(context.Background(), "/users/testuser", &user)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -135,20 +135,20 @@ func TestGithubClient_Get(t *testing.T) {
 	}
 }
 
-func TestGithubClient_Raw(t *testing.T) {
+func TestClient_Raw(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"raw": "json", "data": 123}`))
 	}))
 	defer server.Close()
 
-	client := &githubClient{
-		client: server.Client(),
-		token:  "test-token",
-		api:    server.URL,
+	client := &Client{
+		HTTPClient: server.Client(),
+		Token:      "test-token",
+		BaseURL:    server.URL,
 	}
 
-	raw, resp, err := client.raw(context.Background(), "/test")
+	raw, resp, err := client.Raw(context.Background(), "/test")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestGithubClient_Raw(t *testing.T) {
 	}
 }
 
-func TestGithubClient_Collaborators(t *testing.T) {
+func TestClient_Collaborators(t *testing.T) {
 	tests := []struct {
 		name          string
 		serverHandler http.HandlerFunc
@@ -237,13 +237,13 @@ func TestGithubClient_Collaborators(t *testing.T) {
 			server := httptest.NewServer(tt.serverHandler)
 			defer server.Close()
 
-			client := &githubClient{
-				client: server.Client(),
-				token:  "test-token",
-				api:    server.URL,
+			client := &Client{
+				HTTPClient: server.Client(),
+				Token:      "test-token",
+				BaseURL:    server.URL,
 			}
 
-			collabs, err := client.collaborators(context.Background(), "owner", "repo")
+			collabs, err := client.Collaborators(context.Background(), "owner", "repo")
 
 			if tt.wantErr {
 				if err == nil {
@@ -266,8 +266,8 @@ func TestGithubClient_Collaborators(t *testing.T) {
 	}
 }
 
-func TestGitHubAPIError_Error(t *testing.T) {
-	err := &GitHubAPIError{
+func TestError_Error(t *testing.T) {
+	err := &Error{
 		Status:     "404 Not Found",
 		Body:       `{"message": "Not Found"}`,
 		URL:        "https://api.github.com/repos/owner/repo",
@@ -283,7 +283,7 @@ func TestGitHubAPIError_Error(t *testing.T) {
 	}
 }
 
-func TestGithubClient_TokenMasking(t *testing.T) {
+func TestClient_TokenMasking(t *testing.T) {
 	tests := []struct {
 		name      string
 		token     string
@@ -317,13 +317,13 @@ func TestGithubClient_TokenMasking(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client := &githubClient{
-				client: server.Client(),
-				token:  tt.token,
-				api:    server.URL,
+			client := &Client{
+				HTTPClient: server.Client(),
+				Token:      tt.token,
+				BaseURL:    server.URL,
 			}
 
-			_, _, err := client.doRequest(context.Background(), "/test")
+			_, _, err := client.Do(context.Background(), "/test")
 			if err != nil {
 				t.Errorf("Unexpected error: %v", err)
 			}
@@ -331,7 +331,7 @@ func TestGithubClient_TokenMasking(t *testing.T) {
 	}
 }
 
-func TestGithubClient_RateLimitHeaders(t *testing.T) {
+func TestClient_RateLimitHeaders(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Ratelimit-Limit", "5000")
 		w.Header().Set("X-Ratelimit-Remaining", "4999")
@@ -343,13 +343,13 @@ func TestGithubClient_RateLimitHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &githubClient{
-		client: server.Client(),
-		token:  "test-token",
-		api:    server.URL,
+	client := &Client{
+		HTTPClient: server.Client(),
+		Token:      "test-token",
+		BaseURL:    server.URL,
 	}
 
-	_, resp, err := client.doRequest(context.Background(), "/test")
+	_, resp, err := client.Do(context.Background(), "/test")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestGithubClient_RateLimitHeaders(t *testing.T) {
 	}
 }
 
-func TestGithubClient_PaginationParsing(t *testing.T) {
+func TestClient_PaginationParsing(t *testing.T) {
 	tests := []struct {
 		name         string
 		linkHeader   string
@@ -397,13 +397,13 @@ func TestGithubClient_PaginationParsing(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client := &githubClient{
-				client: server.Client(),
-				token:  "test-token",
-				api:    server.URL,
+			client := &Client{
+				HTTPClient: server.Client(),
+				Token:      "test-token",
+				BaseURL:    server.URL,
 			}
 
-			_, resp, err := client.doRequest(context.Background(), "/test")
+			_, resp, err := client.Do(context.Background(), "/test")
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -414,7 +414,7 @@ func TestGithubClient_PaginationParsing(t *testing.T) {
 	}
 }
 
-func TestGithubClient_ContextCancellation(t *testing.T) {
+func TestClient_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
@@ -422,16 +422,16 @@ func TestGithubClient_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &githubClient{
-		client: server.Client(),
-		token:  "test-token",
-		api:    server.URL,
+	client := &Client{
+		HTTPClient: server.Client(),
+		Token:      "test-token",
+		BaseURL:    server.URL,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	_, _, err := client.doRequest(ctx, "/test")
+	_, _, err := client.Do(ctx, "/test")
 	if err == nil {
 		t.Error("Expected context cancellation error but got none")
 	}

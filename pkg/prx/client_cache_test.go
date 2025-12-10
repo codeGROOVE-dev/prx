@@ -96,9 +96,7 @@ func TestCacheClient(t *testing.T) {
 	}()
 
 	// Override the GitHub client to use test server
-	if gc, ok := client.github.(*githubClient); ok {
-		gc.api = server.URL
-	}
+	client.github = newTestGitHubClient(&http.Client{Transport: &http.Transport{}}, "test-token", server.URL)
 
 	ctx := context.Background()
 

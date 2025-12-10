@@ -164,11 +164,7 @@ func TestCheckRunHistory_MultipleCommits(t *testing.T) {
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
 	client := NewClient("test-token", WithHTTPClient(httpClient))
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "codeGROOVE-dev", "slacker", 66)
@@ -319,11 +315,7 @@ func TestCheckRunHistory_CommitSHAPreservation(t *testing.T) {
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
 	client := NewClient("test-token", WithHTTPClient(httpClient))
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 100)

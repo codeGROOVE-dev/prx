@@ -146,11 +146,7 @@ func TestClient_PullRequestWithReviews(t *testing.T) {
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
 	client := NewClient("test-token", WithHTTPClient(httpClient))
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 789)
@@ -266,11 +262,7 @@ func TestClient_PullRequestWithBots(t *testing.T) {
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
 	client := NewClient("test-token", WithHTTPClient(httpClient))
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 999)

@@ -1,4 +1,4 @@
-package prx
+package github
 
 import (
 	"bytes"
@@ -24,13 +24,13 @@ const (
 	maxRequestSize = 1 * 1024 * 1024 // 1MB - reasonable for API requests
 )
 
-// RetryTransport wraps an http.RoundTripper with retry logic using exponential backoff with jitter.
-type RetryTransport struct {
+// Transport wraps an http.RoundTripper with retry logic using exponential backoff with jitter.
+type Transport struct {
 	Base http.RoundTripper
 }
 
 // RoundTrip implements the http.RoundTripper interface with retry logic.
-func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Base == nil {
 		t.Base = http.DefaultTransport
 	}

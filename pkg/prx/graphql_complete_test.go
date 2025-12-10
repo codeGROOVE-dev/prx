@@ -3,6 +3,8 @@ package prx
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -139,10 +141,19 @@ func TestGraphQLPageInfo(t *testing.T) {
 	}
 }
 
+//nolint:errcheck // Test handlers don't need to check w.Write errors
 func TestConvertGraphQLReviewCommentsWithOutdated(t *testing.T) {
+	// Create a test server that returns empty collaborators
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
 	client := &Client{
 		logger:             slog.Default(),
 		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
+		github:             newTestGitHubClient(&http.Client{}, "test-token", server.URL),
 	}
 	ctx := context.Background()
 

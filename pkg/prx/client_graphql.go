@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/codeGROOVE-dev/prx/pkg/prx/github"
 )
 
 // pullRequestViaGraphQL fetches pull request data using GraphQL with minimal REST fallbacks.
@@ -79,31 +81,31 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 
 // fetchRulesetsREST fetches repository rulesets via REST API (not available in GraphQL).
 func (c *Client) fetchRulesetsREST(ctx context.Context, owner, repo string) ([]string, error) {
-	rulesetPath := fmt.Sprintf("/repos/%s/%s/rulesets", owner, repo)
-	var rulesets []githubRuleset
+	path := fmt.Sprintf("/repos/%s/%s/rulesets", owner, repo)
+	var rulesets []github.Ruleset
 
-	_, err := c.github.get(ctx, rulesetPath, &rulesets)
-	if err != nil {
+	if _, err := c.github.Get(ctx, path, &rulesets); err != nil {
 		return nil, err
 	}
 
-	var requiredChecks []string
-	for _, ruleset := range rulesets {
-		if ruleset.Target == "branch" {
-			for _, rule := range ruleset.Rules {
-				if rule.Type == "required_status_checks" && rule.Parameters.RequiredStatusChecks != nil {
-					for _, check := range rule.Parameters.RequiredStatusChecks {
-						requiredChecks = append(requiredChecks, check.Context)
-					}
+	var required []string
+	for _, rs := range rulesets {
+		if rs.Target != "branch" {
+			continue
+		}
+		for _, rule := range rs.Rules {
+			if rule.Type == "required_status_checks" && rule.Parameters.RequiredStatusChecks != nil {
+				for _, chk := range rule.Parameters.RequiredStatusChecks {
+					required = append(required, chk.Context)
 				}
 			}
 		}
 	}
 
 	c.logger.InfoContext(ctx, "fetched required checks from rulesets",
-		"count", len(requiredChecks), "checks", requiredChecks)
+		"count", len(required), "checks", required)
 
-	return requiredChecks, nil
+	return required, nil
 }
 
 // fetchCheckRunsREST fetches check runs via REST API for a specific commit.
@@ -113,8 +115,8 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 	}
 
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repo, sha)
-	var checkRuns githubCheckRuns
-	if _, err := c.github.get(ctx, path, &checkRuns); err != nil {
+	var checkRuns github.CheckRuns
+	if _, err := c.github.Get(ctx, path, &checkRuns); err != nil {
 		return nil, fmt.Errorf("fetching check runs: %w", err)
 	}
 
@@ -172,33 +174,26 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 // Errors fetching individual commits are logged but don't stop the overall process.
 func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, prData *PullRequestData) []Event {
 	// Collect all unique commit SHAs from the PR
-	commitSHAs := make([]string, 0)
+	shas := make(map[string]bool)
 
 	// Add HEAD SHA (most important)
 	if prData.PullRequest.HeadSHA != "" {
-		commitSHAs = append(commitSHAs, prData.PullRequest.HeadSHA)
+		shas[prData.PullRequest.HeadSHA] = true
 	}
 
 	// Add all other commit SHAs from commit events
 	for i := range prData.Events {
 		e := &prData.Events[i]
 		if e.Kind == "commit" && e.Body != "" {
-			// Body contains the commit SHA for commit events
-			commitSHAs = append(commitSHAs, e.Body)
+			shas[e.Body] = true
 		}
 	}
 
-	// Deduplicate SHAs (in case HEAD is also in commit events)
-	uniqueSHAs := make(map[string]bool)
-	for _, sha := range commitSHAs {
-		uniqueSHAs[sha] = true
-	}
-
 	// Fetch check runs for each unique commit
-	var allEvents []Event
-	seenCheckRuns := make(map[string]bool) // Track unique check runs by "name:timestamp"
+	var all []Event
+	seen := make(map[string]bool) // Track unique check runs by "name:timestamp"
 
-	for sha := range uniqueSHAs {
+	for sha := range shas {
 		events, err := c.fetchCheckRunsREST(ctx, owner, repo, sha)
 		if err != nil {
 			c.logger.WarnContext(ctx, "failed to fetch check runs for commit", "sha", sha, "error", err)
@@ -207,19 +202,17 @@ func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, 
 
 		// Add only unique check runs (same check can run on multiple commits)
 		for i := range events {
-			event := &events[i]
-			// Create a unique key based on check name and timestamp
-			key := fmt.Sprintf("%s:%s", event.Body, event.Timestamp.Format(time.RFC3339Nano))
-			if !seenCheckRuns[key] {
-				seenCheckRuns[key] = true
-				// Add the commit SHA to the Target field
-				event.Target = sha
-				allEvents = append(allEvents, *event)
+			ev := &events[i]
+			key := fmt.Sprintf("%s:%s", ev.Body, ev.Timestamp.Format(time.RFC3339Nano))
+			if !seen[key] {
+				seen[key] = true
+				ev.Target = sha
+				all = append(all, *ev)
 			}
 		}
 	}
 
-	return allEvents
+	return all
 }
 
 // existingRequiredChecks extracts required checks that were already identified.
@@ -228,19 +221,17 @@ func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 
 	// Extract from existing events that are marked as required
 	for i := range prData.Events {
-		event := &prData.Events[i]
-		if event.Required && (event.Kind == "check_run" || event.Kind == "status_check") {
-			required = append(required, event.Body)
+		e := &prData.Events[i]
+		if e.Required && (e.Kind == "check_run" || e.Kind == "status_check") {
+			required = append(required, e.Body)
 		}
 	}
 
 	// Also extract from pending checks in check summary (these are required but haven't run)
 	if prData.PullRequest.CheckSummary != nil {
-		for check := range prData.PullRequest.CheckSummary.Pending {
-			// Check if it's not already in the list
-			found := slices.Contains(required, check)
-			if !found {
-				required = append(required, check)
+		for chk := range prData.PullRequest.CheckSummary.Pending {
+			if !slices.Contains(required, chk) {
+				required = append(required, chk)
 			}
 		}
 	}
@@ -252,16 +243,16 @@ func (*Client) existingRequiredChecks(prData *PullRequestData) []string {
 // This recalculates the entire check summary from ALL events to ensure we have the latest state.
 func (c *Client) recalculateCheckSummaryWithCheckRuns(_ /* ctx */ context.Context, prData *PullRequestData, _ /* checkRunEvents */ []Event) {
 	// Get existing required checks before we overwrite the summary
-	var requiredChecks []string
+	var required []string
 	if prData.PullRequest.CheckSummary != nil {
-		for check := range prData.PullRequest.CheckSummary.Pending {
-			requiredChecks = append(requiredChecks, check)
+		for chk := range prData.PullRequest.CheckSummary.Pending {
+			required = append(required, chk)
 		}
 	}
 
 	// Recalculate the entire check summary from ALL events (including the new check runs)
 	// This ensures we get the latest state based on timestamps
-	prData.PullRequest.CheckSummary = calculateCheckSummary(prData.Events, requiredChecks)
+	prData.PullRequest.CheckSummary = calculateCheckSummary(prData.Events, required)
 
 	// Update test state based on the recalculated check summary
 	prData.PullRequest.TestState = c.calculateTestStateFromCheckSummary(prData.PullRequest.CheckSummary)

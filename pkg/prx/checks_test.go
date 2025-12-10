@@ -127,11 +127,7 @@ func TestClient_PullRequestWithCheckRuns(t *testing.T) {
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
 	client := NewClient("test-token", WithHTTPClient(httpClient))
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 555)
@@ -243,11 +239,7 @@ func TestClient_PullRequestWithBranchProtection(t *testing.T) {
 
 	httpClient := &http.Client{Transport: http.DefaultTransport}
 	client := NewClient("test-token", WithHTTPClient(httpClient))
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 666)

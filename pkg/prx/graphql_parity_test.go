@@ -3,6 +3,8 @@ package prx
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"sort"
 	"testing"
@@ -249,11 +251,22 @@ func TestGraphQLBotDetection(t *testing.T) {
 }
 
 // TestWriteAccessMapping tests the write access calculation
+//
+//nolint:errcheck // Test handlers don't need to check w.Write errors
 func TestWriteAccessMapping(t *testing.T) {
 	ctx := context.Background()
+
+	// Create a test server that returns 403 to simulate unavailable collaborators API
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message": "Resource not accessible by integration"}`))
+	}))
+	defer server.Close()
+
 	c := &Client{
 		logger:             slog.Default(),
 		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
+		github:             newTestGitHubClient(&http.Client{}, "test-token", server.URL),
 	}
 
 	tests := []struct {

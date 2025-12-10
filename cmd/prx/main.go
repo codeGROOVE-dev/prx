@@ -115,7 +115,8 @@ func githubToken() (string, error) {
 	return token, nil
 }
 
-func parsePRURL(prURL string) (owner, repo string, prNumber int, err error) { //nolint:revive // Function needs all 4 return values
+//nolint:revive // function-result-limit: function needs all 4 return values
+func parsePRURL(prURL string) (owner, repo string, prNumber int, err error) {
 	u, err := url.Parse(prURL)
 	if err != nil {
 		return "", "", 0, err

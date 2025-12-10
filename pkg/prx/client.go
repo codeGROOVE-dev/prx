@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/prx/pkg/prx/github"
 	"github.com/codeGROOVE-dev/sfcache"
 	"github.com/codeGROOVE-dev/sfcache/pkg/store/localfs"
 )
@@ -39,11 +39,7 @@ type PRStore = sfcache.Store[string, PullRequestData]
 
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
-	github interface {
-		get(ctx context.Context, path string, v any) (*githubResponse, error)
-		raw(ctx context.Context, path string) (json.RawMessage, *githubResponse, error)
-		collaborators(ctx context.Context, owner, repo string) (map[string]string, error)
-	}
+	github             *github.Client
 	logger             *slog.Logger
 	collaboratorsCache *sfcache.MemoryCache[string, map[string]string]
 	prCache            *sfcache.TieredCache[string, PullRequestData]
@@ -65,11 +61,11 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	return func(c *Client) {
 		// Wrap the transport with retry logic if not already wrapped
 		if httpClient.Transport == nil {
-			httpClient.Transport = &RetryTransport{Base: http.DefaultTransport}
-		} else if _, ok := httpClient.Transport.(*RetryTransport); !ok {
-			httpClient.Transport = &RetryTransport{Base: httpClient.Transport}
+			httpClient.Transport = &github.Transport{Base: http.DefaultTransport}
+		} else if _, ok := httpClient.Transport.(*github.Transport); !ok {
+			httpClient.Transport = &github.Transport{Base: httpClient.Transport}
 		}
-		c.github = &githubClient{client: httpClient, token: c.token, api: githubAPI}
+		c.github = newGitHubClient(httpClient, c.token, github.API)
 	}
 }
 
@@ -102,14 +98,14 @@ func NewClient(token string, opts ...Option) *Client {
 		logger:             slog.Default(),
 		token:              token,
 		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
-		github: &githubClient{
-			client: &http.Client{
-				Transport: &RetryTransport{Base: transport},
+		github: newGitHubClient(
+			&http.Client{
+				Transport: &github.Transport{Base: transport},
 				Timeout:   30 * time.Second,
 			},
-			token: token,
-			api:   githubAPI,
-		},
+			token,
+			github.API,
+		),
 	}
 
 	for _, opt := range opts {

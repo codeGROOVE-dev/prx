@@ -61,11 +61,7 @@ func TestClient_PullRequest(t *testing.T) {
 	client := NewClient("test-token", WithHTTPClient(httpClient))
 
 	// Override the API URL to point to our test server
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	prData, err := client.PullRequest(ctx, "testowner", "testrepo", 123)
@@ -142,11 +138,7 @@ func TestClient_PullRequestWithCache(t *testing.T) {
 	client := NewClient("test-token", WithCacheStore(store), WithHTTPClient(httpClient))
 
 	// Override the API URL
-	client.github = &githubClient{
-		client: httpClient,
-		token:  "test-token",
-		api:    server.URL,
-	}
+	client.github = newTestGitHubClient(httpClient, "test-token", server.URL)
 
 	ctx := context.Background()
 	refTime := time.Now()

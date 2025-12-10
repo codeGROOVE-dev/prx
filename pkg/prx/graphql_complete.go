@@ -1,13 +1,8 @@
 package prx
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -15,12 +10,7 @@ import (
 
 // fetchPullRequestCompleteViaGraphQL fetches all PR data in a single GraphQL query.
 func (c *Client) fetchPullRequestCompleteViaGraphQL(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
-	gc, ok := c.github.(*githubClient)
-	if !ok {
-		return nil, errors.New("cannot access GitHub client for GraphQL")
-	}
-
-	data, err := c.executePaginatedGraphQL(ctx, gc, owner, repo, prNumber)
+	data, err := c.executeGraphQL(ctx, owner, repo, prNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -44,58 +34,17 @@ func (c *Client) fetchPullRequestCompleteViaGraphQL(ctx context.Context, owner, 
 	}, nil
 }
 
-// executePaginatedGraphQL handles pagination for large PRs.
-func (c *Client) executePaginatedGraphQL(
-	ctx context.Context, gc *githubClient, owner, repo string, prNumber int,
-) (*graphQLPullRequestComplete, error) {
+// executeGraphQL executes the GraphQL query and handles errors.
+func (c *Client) executeGraphQL(ctx context.Context, owner, repo string, prNumber int) (*graphQLPullRequestComplete, error) {
 	variables := map[string]any{
 		"owner":  owner,
 		"repo":   repo,
 		"number": prNumber,
 	}
 
-	requestBody := map[string]any{
-		"query":     completeGraphQLQuery,
-		"variables": variables,
-	}
-
-	bodyBytes, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling GraphQL request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gc.api+"/graphql", bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating GraphQL request: %w", err)
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", gc.token))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/vnd.github.v4+json")
-	req.Header.Set("Accept", "application/vnd.github.stone-age-preview+json")
-
-	resp, err := gc.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing GraphQL request: %w", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			c.logger.WarnContext(ctx, "failed to close response body", "error", err)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		limitedBody := io.LimitReader(resp.Body, 1024*1024)
-		body, err := io.ReadAll(limitedBody)
-		if err != nil {
-			return nil, fmt.Errorf("GraphQL request failed with status %d", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("GraphQL request failed with status %d: %s", resp.StatusCode, body)
-	}
-
 	var result graphQLCompleteResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding GraphQL response: %w", err)
+	if err := c.github.GraphQL(ctx, completeGraphQLQuery, variables, &result); err != nil {
+		return nil, err
 	}
 
 	if len(result.Errors) > 0 {
@@ -672,12 +621,7 @@ func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, u
 	cacheKey := collaboratorsCacheKey(owner, repo)
 
 	collabs, err := c.collaboratorsCache.GetSet(cacheKey, func() (map[string]string, error) {
-		gc, ok := c.github.(*githubClient)
-		if !ok {
-			return nil, errNotGitHubClient
-		}
-
-		result, fetchErr := gc.collaborators(ctx, owner, repo)
+		result, fetchErr := c.github.Collaborators(ctx, owner, repo)
 		if fetchErr != nil {
 			c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",
 				"owner", owner,
@@ -685,11 +629,8 @@ func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, u
 				"user", user,
 				"error", fetchErr)
 
-			var apiErr *GitHubAPIError
-			if errors.As(fetchErr, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
-				return make(map[string]string), nil
-			}
-
+			// On any error (including 403 Forbidden), return the error
+			// so that checkCollaboratorPermission returns WriteAccessLikely
 			return nil, fetchErr
 		}
 
@@ -708,8 +649,6 @@ func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, u
 		return WriteAccessUnlikely
 	}
 }
-
-var errNotGitHubClient = errors.New("not a github client")
 
 // extractRequiredChecksFromGraphQL gets required checks from GraphQL response.
 func (*Client) extractRequiredChecksFromGraphQL(data *graphQLPullRequestComplete) []string {

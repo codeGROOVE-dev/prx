@@ -3,18 +3,20 @@ package prx
 import (
 	"testing"
 	"time"
+
+	"github.com/codeGROOVE-dev/prx/pkg/prx/github"
 )
 
 func TestCheckRunStatusDescriptions(t *testing.T) {
 	tests := []struct {
 		name            string
-		checkRun        githubCheckRun
+		checkRun        github.CheckRun
 		expectedDesc    string
 		expectedOutcome string
 	}{
 		{
 			name: "check with title and summary",
-			checkRun: githubCheckRun{
+			checkRun: github.CheckRun{
 				Name:        "*control",
 				Status:      "completed",
 				Conclusion:  "failure",
@@ -32,7 +34,7 @@ func TestCheckRunStatusDescriptions(t *testing.T) {
 		},
 		{
 			name: "check with only title",
-			checkRun: githubCheckRun{
+			checkRun: github.CheckRun{
 				Name:        "test-check",
 				Status:      "completed",
 				Conclusion:  "success",
@@ -49,7 +51,7 @@ func TestCheckRunStatusDescriptions(t *testing.T) {
 		},
 		{
 			name: "check with only summary",
-			checkRun: githubCheckRun{
+			checkRun: github.CheckRun{
 				Name:        "lint-check",
 				Status:      "completed",
 				Conclusion:  "failure",
@@ -66,7 +68,7 @@ func TestCheckRunStatusDescriptions(t *testing.T) {
 		},
 		{
 			name: "check with no output",
-			checkRun: githubCheckRun{
+			checkRun: github.CheckRun{
 				Name:        "basic-check",
 				Status:      "completed",
 				Conclusion:  "neutral",
@@ -77,7 +79,7 @@ func TestCheckRunStatusDescriptions(t *testing.T) {
 		},
 		{
 			name: "pending check (not completed)",
-			checkRun: githubCheckRun{
+			checkRun: github.CheckRun{
 				Name:      "pending-check",
 				Status:    "in_progress",
 				StartedAt: time.Now(),
@@ -200,7 +202,7 @@ func TestDropshotPR1359Regression(t *testing.T) {
 	// This test ensures we don't regress on the specific case of Dropshot PR #1359
 	// where the *control check should show "Plan requires authorisation." description
 
-	checkRun := githubCheckRun{
+	checkRun := github.CheckRun{
 		Name:        "*control",
 		Status:      "completed",
 		Conclusion:  "failure",
