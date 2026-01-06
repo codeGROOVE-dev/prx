@@ -618,7 +618,7 @@ func (c *Client) writeAccessFromAssociation(ctx context.Context, owner, repo, us
 
 // checkCollaboratorPermission checks if a user has write access.
 func (c *Client) checkCollaboratorPermission(ctx context.Context, owner, repo, user string) int {
-	collabs, err := c.collaboratorsCache.GetSet(collaboratorsCacheKey(owner, repo), func() (map[string]string, error) {
+	collabs, err := c.collaboratorsCache.Fetch(collaboratorsCacheKey(owner, repo), func() (map[string]string, error) {
 		result, fetchErr := c.github.Collaborators(ctx, owner, repo)
 		if fetchErr != nil {
 			c.logger.WarnContext(ctx, "failed to fetch collaborators for write access check",

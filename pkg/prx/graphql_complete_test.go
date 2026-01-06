@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/fido"
 )
 
 func TestIsBot(t *testing.T) {
@@ -152,7 +152,7 @@ func TestConvertGraphQLReviewCommentsWithOutdated(t *testing.T) {
 
 	client := &Client{
 		logger:             slog.Default(),
-		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
+		collaboratorsCache: fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL)),
 		github:             newTestGitHubClient(&http.Client{}, "test-token", server.URL),
 	}
 	ctx := context.Background()

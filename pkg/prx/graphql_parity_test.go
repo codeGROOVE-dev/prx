@@ -8,8 +8,9 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
-	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/fido"
 )
 
 // TestGraphQLParity verifies that GraphQL implementation returns the same data as REST
@@ -20,6 +21,7 @@ func TestGraphQLParity(t *testing.T) {
 
 	ctx := context.Background()
 	client := &Client{} // Would need proper initialization
+	refTime := time.Now()
 
 	// Test data
 	owner := "golang"
@@ -27,13 +29,13 @@ func TestGraphQLParity(t *testing.T) {
 	prNumber := 1
 
 	// Fetch via direct call (non-cached)
-	restData, err := client.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+	restData, err := client.pullRequestViaGraphQL(ctx, owner, repo, prNumber, refTime)
 	if err != nil {
 		t.Fatalf("Direct fetch failed: %v", err)
 	}
 
 	// Fetch via GraphQL
-	graphqlData, err := client.pullRequestViaGraphQL(ctx, owner, repo, prNumber)
+	graphqlData, err := client.pullRequestViaGraphQL(ctx, owner, repo, prNumber, refTime)
 	if err != nil {
 		t.Fatalf("GraphQL fetch failed: %v", err)
 	}
@@ -265,7 +267,7 @@ func TestWriteAccessMapping(t *testing.T) {
 
 	c := &Client{
 		logger:             slog.Default(),
-		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
+		collaboratorsCache: fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL)),
 		github:             newTestGitHubClient(&http.Client{}, "test-token", server.URL),
 	}
 

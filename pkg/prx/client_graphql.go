@@ -13,7 +13,8 @@ import (
 
 // pullRequestViaGraphQL fetches pull request data using GraphQL with minimal REST fallbacks.
 // This hybrid approach reduces API calls from 13+ to ~3-4 while maintaining complete data fidelity.
-func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, prNumber int) (*PullRequestData, error) {
+// The refTime parameter is used for cache validation of sub-requests like check runs.
+func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, prNumber int, refTime time.Time) (*PullRequestData, error) {
 	c.logger.InfoContext(ctx, "fetching pull request via GraphQL", "owner", owner, "repo", repo, "pr", prNumber)
 
 	// Main GraphQL query - gets 90% of the data in one call
@@ -42,7 +43,7 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 
 	// 2. Fetch check runs via REST for all commits (GraphQL's statusCheckRollup is often null)
 	// This ensures we capture check run history including failures from earlier commits
-	checkRunEvents := c.fetchAllCheckRunsREST(ctx, owner, repo, prData)
+	checkRunEvents := c.fetchAllCheckRunsREST(ctx, owner, repo, prData, refTime)
 
 	// Mark check runs as required based on combined list
 	for i := range checkRunEvents {
@@ -80,38 +81,66 @@ func (c *Client) pullRequestViaGraphQL(ctx context.Context, owner, repo string, 
 }
 
 // fetchRulesetsREST fetches repository rulesets via REST API (not available in GraphQL).
+// Results are cached for 3 hours to reduce API calls. Uses Fetch to prevent thundering herds.
 func (c *Client) fetchRulesetsREST(ctx context.Context, owner, repo string) ([]string, error) {
-	path := fmt.Sprintf("/repos/%s/%s/rulesets", owner, repo)
-	var rulesets []github.Ruleset
+	cacheKey := rulesetsCacheKey(owner, repo)
 
-	if _, err := c.github.Get(ctx, path, &rulesets); err != nil {
-		return nil, err
-	}
+	return c.rulesetsCache.Fetch(cacheKey, func() ([]string, error) {
+		path := fmt.Sprintf("/repos/%s/%s/rulesets", owner, repo)
+		var rulesets []github.Ruleset
 
-	var required []string
-	for _, rs := range rulesets {
-		if rs.Target != "branch" {
-			continue
+		if _, err := c.github.Get(ctx, path, &rulesets); err != nil {
+			return nil, err
 		}
-		for _, rule := range rs.Rules {
-			if rule.Type == "required_status_checks" && rule.Parameters.RequiredStatusChecks != nil {
-				for _, chk := range rule.Parameters.RequiredStatusChecks {
-					required = append(required, chk.Context)
+
+		var required []string
+		for _, rs := range rulesets {
+			if rs.Target != "branch" {
+				continue
+			}
+			for _, rule := range rs.Rules {
+				if rule.Type == "required_status_checks" && rule.Parameters.RequiredStatusChecks != nil {
+					for _, chk := range rule.Parameters.RequiredStatusChecks {
+						required = append(required, chk.Context)
+					}
 				}
 			}
 		}
+
+		c.logger.InfoContext(ctx, "fetched required checks from rulesets",
+			"owner", owner, "repo", repo, "count", len(required), "checks", required)
+
+		return required, nil
+	})
+}
+
+// truncateSHA returns the first 7 characters of a SHA, or the full string if shorter.
+func truncateSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
 	}
-
-	c.logger.InfoContext(ctx, "fetched required checks from rulesets",
-		"count", len(required), "checks", required)
-
-	return required, nil
+	return sha
 }
 
 // fetchCheckRunsREST fetches check runs via REST API for a specific commit.
-func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string) ([]Event, error) {
+// Results are cached and validated against refTime.
+func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string, refTime time.Time) ([]Event, error) {
 	if sha == "" {
 		return nil, nil
+	}
+
+	cacheKey := checkRunsCacheKey(owner, repo, sha)
+
+	// Check cache with reference time validation
+	if cached, ok := c.checkRunsCache.Get(cacheKey); ok {
+		if !cached.CachedAt.Before(refTime) {
+			c.logger.InfoContext(ctx, "cache hit: check runs",
+				"owner", owner, "repo", repo, "sha", truncateSHA(sha), "count", len(cached.Events))
+			return cached.Events, nil
+		}
+		c.logger.InfoContext(ctx, "cache miss: check runs expired",
+			"owner", owner, "repo", repo, "sha", truncateSHA(sha),
+			"cached_at", cached.CachedAt, "reference_time", refTime)
 	}
 
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repo, sha)
@@ -165,6 +194,15 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 		events = append(events, event)
 	}
 
+	// Cache the results
+	c.checkRunsCache.Set(cacheKey, cachedCheckRuns{
+		Events:   events,
+		CachedAt: time.Now(),
+	})
+
+	c.logger.InfoContext(ctx, "fetched check runs from API",
+		"owner", owner, "repo", repo, "sha", truncateSHA(sha), "count", len(events))
+
 	return events, nil
 }
 
@@ -172,7 +210,8 @@ func (c *Client) fetchCheckRunsREST(ctx context.Context, owner, repo, sha string
 // This ensures we capture the full history including failures from earlier commits
 // that may have been superseded by successful runs on later commits.
 // Errors fetching individual commits are logged but don't stop the overall process.
-func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, prData *PullRequestData) []Event {
+// The refTime parameter is used for cache validation.
+func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, prData *PullRequestData, refTime time.Time) []Event {
 	// Collect all unique commit SHAs from the PR
 	shas := make(map[string]bool)
 
@@ -194,7 +233,7 @@ func (c *Client) fetchAllCheckRunsREST(ctx context.Context, owner, repo string, 
 	seen := make(map[string]bool) // Track unique check runs by "name:timestamp"
 
 	for sha := range shas {
-		events, err := c.fetchCheckRunsREST(ctx, owner, repo, sha)
+		events, err := c.fetchCheckRunsREST(ctx, owner, repo, sha, refTime)
 		if err != nil {
 			c.logger.WarnContext(ctx, "failed to fetch check runs for commit", "sha", sha, "error", err)
 			continue

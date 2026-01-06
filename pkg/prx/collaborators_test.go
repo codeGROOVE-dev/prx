@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/fido"
 )
 
 // TestPermissionToWriteAccess tests permission level mapping
@@ -46,9 +46,9 @@ func TestPermissionToWriteAccess(t *testing.T) {
 	}
 }
 
-// TestCollaboratorsCacheGetSet tests cache get/set operations using sfcache
+// TestCollaboratorsCacheGetSet tests cache get/set operations using fido
 func TestCollaboratorsCacheGetSet(t *testing.T) {
-	cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
+	cache := fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL))
 
 	owner := "testowner"
 	repo := "testrepo"
@@ -136,7 +136,7 @@ func TestWriteAccessFromAssociationWithCache(t *testing.T) {
 			ctx := context.Background()
 
 			// Setup cache with test data
-			cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
+			cache := fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL))
 
 			collabs := map[string]string{
 				"alice":   "admin",
@@ -170,7 +170,7 @@ func TestWriteAccessFromAssociationCacheHit(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup cache with test data
-	cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
+	cache := fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL))
 
 	collabs := map[string]string{
 		"tstromberg": "admin",
@@ -200,7 +200,7 @@ func TestWriteAccessFromAssociationNonMember(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty cache
-	cache := sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL))
+	cache := fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL))
 
 	c := &Client{
 		logger:             slog.Default(),

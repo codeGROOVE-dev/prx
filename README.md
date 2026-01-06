@@ -231,7 +231,7 @@ client := prx.NewClient(token, prx.WithCacheStore(store))
 To disable caching persistence (memory-only):
 
 ```go
-import "github.com/codeGROOVE-dev/sfcache/pkg/store/null"
+import "github.com/codeGROOVE-dev/fido/pkg/store/null"
 
 client := prx.NewClient(token, prx.WithCacheStore(null.New[string, prx.PullRequestData]()))
 ```

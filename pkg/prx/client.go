@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/fido"
+	"github.com/codeGROOVE-dev/fido/pkg/store/localfs"
 	"github.com/codeGROOVE-dev/prx/pkg/prx/github"
-	"github.com/codeGROOVE-dev/sfcache"
-	"github.com/codeGROOVE-dev/sfcache/pkg/store/localfs"
 )
 
 const (
@@ -29,20 +29,30 @@ const (
 	idleConnTimeoutSec  = 90
 
 	// Cache TTL constants.
-	prCacheTTL            = 20 * 24 * time.Hour // 20 days
-	collaboratorsCacheTTL = 4 * time.Hour
+	prCacheTTL            = 20 * 24 * time.Hour // 20 days - validity checked against reference time
+	checkRunsCacheTTL     = 20 * 24 * time.Hour // 20 days - validity checked against reference time
+	collaboratorsCacheTTL = 3 * time.Hour       // 3 hours - repo-level, simple TTL
+	rulesetsCacheTTL      = 3 * time.Hour       // 3 hours - repo-level, simple TTL
 )
 
+// cachedCheckRuns stores check run events with a timestamp for cache validation.
+type cachedCheckRuns struct {
+	CachedAt time.Time
+	Events   []Event
+}
+
 // PRStore is the interface for PR cache storage backends.
-// This is an alias for sfcache.Store with the appropriate type parameters.
-type PRStore = sfcache.Store[string, PullRequestData]
+// This is an alias for fido.Store with the appropriate type parameters.
+type PRStore = fido.Store[string, PullRequestData]
 
 // Client provides methods to fetch GitHub pull request events.
 type Client struct {
 	github             *github.Client
 	logger             *slog.Logger
-	collaboratorsCache *sfcache.MemoryCache[string, map[string]string]
-	prCache            *sfcache.TieredCache[string, PullRequestData]
+	collaboratorsCache *fido.Cache[string, map[string]string]
+	rulesetsCache      *fido.Cache[string, []string]
+	checkRunsCache     *fido.Cache[string, cachedCheckRuns]
+	prCache            *fido.TieredCache[string, PullRequestData]
 	token              string // Store token for recreating client with new transport
 }
 
@@ -73,7 +83,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 // Use null.New[string, prx.PullRequestData]() to disable persistence.
 func WithCacheStore(store PRStore) Option {
 	return func(c *Client) {
-		prCache, err := sfcache.NewTiered(store, sfcache.TTL(prCacheTTL))
+		prCache, err := fido.NewTiered(store, fido.TTL(prCacheTTL))
 		if err != nil {
 			c.logger.Warn("failed to create cache from store, using default", "error", err)
 			return
@@ -97,7 +107,9 @@ func NewClient(token string, opts ...Option) *Client {
 	c := &Client{
 		logger:             slog.Default(),
 		token:              token,
-		collaboratorsCache: sfcache.New[string, map[string]string](sfcache.TTL(collaboratorsCacheTTL)),
+		collaboratorsCache: fido.New[string, map[string]string](fido.TTL(collaboratorsCacheTTL)),
+		rulesetsCache:      fido.New[string, []string](fido.TTL(rulesetsCacheTTL)),
+		checkRunsCache:     fido.New[string, cachedCheckRuns](fido.TTL(checkRunsCacheTTL)),
 		github: newGitHubClient(
 			&http.Client{
 				Transport: &github.Transport{Base: transport},
@@ -120,7 +132,7 @@ func NewClient(token string, opts ...Option) *Client {
 	return c
 }
 
-func createDefaultCache(log *slog.Logger) *sfcache.TieredCache[string, PullRequestData] {
+func createDefaultCache(log *slog.Logger) *fido.TieredCache[string, PullRequestData] {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		dir = os.TempDir()
@@ -135,7 +147,7 @@ func createDefaultCache(log *slog.Logger) *sfcache.TieredCache[string, PullReque
 		log.Warn("failed to create cache store, caching disabled", "error", err)
 		return nil
 	}
-	cache, err := sfcache.NewTiered(store, sfcache.TTL(prCacheTTL))
+	cache, err := fido.NewTiered(store, fido.TTL(prCacheTTL))
 	if err != nil {
 		log.Warn("failed to create cache, caching disabled", "error", err)
 		return nil
@@ -156,7 +168,7 @@ func (c *Client) PullRequestWithReferenceTime(
 	refTime time.Time,
 ) (*PullRequestData, error) {
 	if c.prCache == nil {
-		return c.pullRequestViaGraphQL(ctx, owner, repo, pr)
+		return c.pullRequestViaGraphQL(ctx, owner, repo, pr, refTime)
 	}
 
 	key := prCacheKey(owner, repo, pr)
@@ -180,8 +192,8 @@ func (c *Client) PullRequestWithReferenceTime(
 			"owner", owner, "repo", repo, "pr", pr)
 	}
 
-	result, err := c.prCache.GetSet(ctx, key, func(ctx context.Context) (PullRequestData, error) {
-		data, err := c.pullRequestViaGraphQL(ctx, owner, repo, pr)
+	result, err := c.prCache.Fetch(ctx, key, func(ctx context.Context) (PullRequestData, error) {
+		data, err := c.pullRequestViaGraphQL(ctx, owner, repo, pr, refTime)
 		if err != nil {
 			return PullRequestData{}, err
 		}
@@ -229,4 +241,14 @@ func prCacheKey(owner, repo string, prNumber int) string {
 // collaboratorsCacheKey generates a cache key for collaborators data.
 func collaboratorsCacheKey(owner, repo string) string {
 	return fmt.Sprintf("%s/%s", owner, repo)
+}
+
+// rulesetsCacheKey generates a cache key for rulesets data.
+func rulesetsCacheKey(owner, repo string) string {
+	return fmt.Sprintf("%s/%s", owner, repo)
+}
+
+// checkRunsCacheKey generates a cache key for check runs data.
+func checkRunsCacheKey(owner, repo, sha string) string {
+	return fmt.Sprintf("%s/%s/%s", owner, repo, sha)
 }

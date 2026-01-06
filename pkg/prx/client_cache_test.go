@@ -124,7 +124,7 @@ func TestCacheClient(t *testing.T) {
 	}
 	afterSecondRequest := requestCount
 
-	// We expect zero API requests for cached call (sfcache handles persistence)
+	// We expect zero API requests for cached call (fido handles persistence)
 	if afterSecondRequest != beforeSecondRequest {
 		t.Logf("Note: Got %d API requests for cached call (cache may need warming)", afterSecondRequest-beforeSecondRequest)
 	}
@@ -189,5 +189,132 @@ func TestIsHexString(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("isHexString(%q) = %v, want %v", tt.input, result, tt.expected)
 		}
+	}
+}
+
+func TestRulesetsCacheKey(t *testing.T) {
+	key1 := rulesetsCacheKey("owner", "repo")
+	key2 := rulesetsCacheKey("owner", "repo")
+
+	if key1 != key2 {
+		t.Errorf("Same inputs produced different keys: %s vs %s", key1, key2)
+	}
+
+	key3 := rulesetsCacheKey("other", "repo")
+	if key1 == key3 {
+		t.Error("Different inputs produced same key")
+	}
+
+	// Verify format
+	expected := "owner/repo"
+	if key1 != expected {
+		t.Errorf("Expected key %q, got %q", expected, key1)
+	}
+}
+
+func TestRulesetsCache(t *testing.T) {
+	// Track API calls to rulesets endpoint
+	rulesetsAPICallCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/graphql":
+			response := `{"data": {"repository": {"pullRequest": {
+				"number": 1,
+				"title": "Test PR",
+				"body": "Test body",
+				"state": "OPEN",
+				"isDraft": false,
+				"createdAt": "2023-01-01T00:00:00Z",
+				"updatedAt": "2023-01-01T01:00:00Z",
+				"closedAt": null,
+				"mergedAt": null,
+				"mergedBy": null,
+				"mergeable": "UNKNOWN",
+				"mergeStateStatus": "UNKNOWN",
+				"additions": 10,
+				"deletions": 5,
+				"changedFiles": 2,
+				"author": {"login": "testuser"},
+				"authorAssociation": "CONTRIBUTOR",
+				"headRef": {"target": {"oid": "abc123"}},
+				"baseRef": {"name": "main", "target": {"oid": "def456"}},
+				"assignees": {"nodes": []},
+				"labels": {"nodes": []},
+				"reviews": {"nodes": []},
+				"reviewRequests": {"nodes": []},
+				"reviewThreads": {"nodes": []},
+				"commits": {"nodes": []},
+				"statusCheckRollup": null,
+				"timelineItems": {"nodes": [], "pageInfo": {"hasNextPage": false}},
+				"comments": {"nodes": []}
+			}}}}`
+			if _, err := w.Write([]byte(response)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		case "/repos/test/repo/rulesets":
+			rulesetsAPICallCount++
+			// Return rulesets with a required check
+			response := `[{"id": 1, "name": "main protection", "target": "branch", "rules": [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ci/test"}]}}]}]`
+			if _, err := w.Write([]byte(response)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		case "/repos/test/repo/commits/abc123/check-runs":
+			if _, err := w.Write([]byte(`{"check_runs": []}`)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		default:
+			if _, err := w.Write([]byte("[]")); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token",
+		WithHTTPClient(&http.Client{Transport: &http.Transport{}}),
+		WithLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))),
+	)
+	client.github = newTestGitHubClient(&http.Client{Transport: &http.Transport{}}, "test-token", server.URL)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("Failed to close client: %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	refTime := time.Now()
+
+	// First request - should call rulesets API
+	_, err := client.pullRequestViaGraphQL(ctx, "test", "repo", 1, refTime)
+	if err != nil {
+		t.Fatalf("First request failed: %v", err)
+	}
+
+	if rulesetsAPICallCount != 1 {
+		t.Errorf("Expected 1 rulesets API call, got %d", rulesetsAPICallCount)
+	}
+
+	// Second request - should use cached rulesets
+	_, err = client.pullRequestViaGraphQL(ctx, "test", "repo", 1, refTime)
+	if err != nil {
+		t.Fatalf("Second request failed: %v", err)
+	}
+
+	if rulesetsAPICallCount != 1 {
+		t.Errorf("Expected rulesets to be cached (still 1 API call), got %d", rulesetsAPICallCount)
+	}
+
+	// Third request for same repo - should still use cache
+	_, err = client.pullRequestViaGraphQL(ctx, "test", "repo", 2, refTime)
+	if err != nil {
+		t.Fatalf("Third request failed: %v", err)
+	}
+
+	if rulesetsAPICallCount != 1 {
+		t.Errorf("Expected rulesets cache to be used across PRs in same repo, got %d API calls", rulesetsAPICallCount)
 	}
 }
